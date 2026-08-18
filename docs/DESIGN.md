@@ -81,3 +81,9 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 - 全部 PowerShell 原生通道对受限语言模式（ConstrainedLanguage）兼容：
   不依赖 Add-Type、反射或非核心 .NET 静态调用
 - stdout 只输出 UTF-8 JSON 数组，诊断信息走 Verbose 流
+- **序列号解析**（对齐 FileSystemExplorer 策略）：NVMe 盘的
+  `Win32_DiskDrive.SerialNumber` 为 NGUID 编码形态（十六进制分组，如
+  `0025_3842_A1B2_C3D4.`），并非真实序列号。解析优先级：
+  `MSFT_PhysicalDisk.AdapterSerialNumber`（剥离尾部「 _NNNN」控制器号）>
+  `FruId` > `SerialNumber`（NGUID 形态时按 hex→ASCII 解码，依次尝试直接 /
+  反转 / 两两交换三种字节序）> Win32_DiskDrive 兜底

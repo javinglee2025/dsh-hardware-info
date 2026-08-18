@@ -146,6 +146,11 @@ Win32_DiskDrive（WMI 基本信息，恒可用）
   阈值取自 `MSStorageDriver_ATAPISmartThresholds`
 - `MSFT_StorageReliabilityCounter`：温度 / 上电时间 / 磨损 / 读写错误 + 磁盘健康
 - `smartctl -A --json`：完整属性表与 NVMe 健康日志（固定安装目录优先，防 PATH 劫持）
+- `MSFT_PhysicalDisk`（身份信息修正通道）：序列号按优先级解析——
+  `AdapterSerialNumber`（剥离尾部 `_NNNN` 控制器号）> `FruId` > `SerialNumber`
+  （NGUID 编码形态时 hex→ASCII 解码）> Win32_DiskDrive 兜底。NVMe 盘的
+  `Win32_DiskDrive.SerialNumber` 是 NGUID 编码串（如 `0025_3842_A1B2_C3D4.`），
+  不是真实序列号
 
 > **实测注意**：部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 恒为 0、
 > `total_bytes_written/read` 为 null（该通道未追踪这些字段），**不能据此判断是「新盘」**；

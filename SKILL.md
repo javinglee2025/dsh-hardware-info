@@ -91,6 +91,9 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 
 数据解读注意：
 
+- `serial_number` 按 MSFT_PhysicalDisk 优先级解析（`AdapterSerialNumber` 剥离尾部
+  `_NNNN` 控制器号 > `FruId` > `SerialNumber` 的 NGUID→ASCII 解码 > Win32 兜底）；
+  NVMe 盘的 `Win32_DiskDrive.SerialNumber` 为 NGUID 编码形态，不可直接对外引用
 - 部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 恒为 0、读写量为 null：
   该通道未追踪这些字段，不能据此判断「新盘」；需真实通电时间 / 读写量时走
   smartctl（`-d nvme`）通道

@@ -2,6 +2,17 @@
 
 本项目采用语义化版本号。每次含逻辑变更的提交应在本文件登记。
 
+## [0.1.2] - 2026-08-18
+
+### 修复
+
+- 序列号解析错误：NVMe 盘的 `serial_number` 原先取自 Win32_DiskDrive，返回的是
+  NGUID 编码形态（如 `0025_3842_A1B2_C3D4.`）而非真实序列号。现按
+  FileSystemExplorer 的策略解析：`MSFT_PhysicalDisk.AdapterSerialNumber`
+  （剥离尾部 `_NNNN` 控制器号）> `FruId` > `SerialNumber`（NGUID 形态 hex→ASCII
+  解码，直接 / 反转 / 两两交换三种字节序）> Win32 兜底
+- 同步重新生成 `plugin/host.js`
+
 ## [0.1.1] - 2026-08-18
 
 ### 文档

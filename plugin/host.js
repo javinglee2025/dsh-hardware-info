@@ -282,6 +282,92 @@ function Find-PhysicalDiskFor {
     return $null
 }
 
+# ── 序列号解析（策略移植自 FileSystemExplorer）──
+# Win32_DiskDrive.SerialNumber 对 NVMe 盘返回 NGUID 编码串而非真实序列号；
+# 真实序列号在 MSFT_PhysicalDisk.AdapterSerialNumber（格式「序列号 _NNNN」）或 FruId。
+
+function Test-LooksLikeNguidEui {
+    param([string]$Serial)
+    if ([string]::IsNullOrWhiteSpace($Serial)) { return $false }
+    $hex = ($Serial.ToCharArray() | Where-Object { $_ -match '[0-9A-Fa-f]' }) -join ''
+    $total = @($Serial.ToCharArray() | Where-Object { -not [char]::IsWhiteSpace($_) }).Count
+    if ($total -eq 0) { return $false }
+    if (($hex.Length / $total) -lt 0.8) { return $false }
+    if ($hex.Length -eq 32 -or $hex.Length -eq 16) { return $true }
+    if ($hex.Length -ge 20) { return $true }
+    if ($Serial.Contains('_')) { return $true }
+    return $false
+}
+
+function Get-AsciiFromBytes {
+    param([object[]]$Bytes)
+    $chars = @($Bytes | Where-Object { ([int]$_ -ge 0x20) -and ([int]$_ -le 0x7E) } | ForEach-Object { [char]$_ })
+    if ($chars.Count -ge 8) { return (($chars -join '').Trim()) }
+    return $null
+}
+
+function ConvertFrom-HexSerial {
+    param([string]$Serial)
+    if ([string]::IsNullOrWhiteSpace($Serial)) { return $null }
+    $hex = ($Serial.ToCharArray() | Where-Object { $_ -match '[0-9A-Fa-f]' }) -join ''
+    if ($hex.Length -lt 2) { return $null }
+    $bytes = @()
+    for ($i = 0; $i -lt $hex.Length - 1; $i += 2) {
+        $bytes += [byte]('0x' + $hex.Substring($i, 2))
+    }
+    $direct = Get-AsciiFromBytes $bytes
+    if ($direct) { return $direct }
+    $rev = @()
+    for ($i = $bytes.Count - 1; $i -ge 0; $i--) { $rev += $bytes[$i] }
+    $reversed = Get-AsciiFromBytes $rev
+    if ($reversed) { return $reversed }
+    $swapped = @()
+    for ($i = 0; $i -lt $bytes.Count; $i += 2) {
+        if ($i + 1 -lt $bytes.Count) {
+            $swapped += $bytes[$i + 1]
+            $swapped += $bytes[$i]
+        }
+        else { $swapped += $bytes[$i] }
+    }
+    $pairSwapped = Get-AsciiFromBytes $swapped
+    if ($pairSwapped) { return $pairSwapped }
+    return $null
+}
+
+function Resolve-DiskSerial {
+    param([string]$Win32Serial, $Pd)
+    # 1) AdapterSerialNumber：NVMe 真实序列号，尾部「 _NNNN」为控制器号需剥离
+    if ($Pd -and $null -ne $Pd.PSObject.Properties['AdapterSerialNumber']) {
+        $adapter = ([string]$Pd.AdapterSerialNumber).Trim()
+        if ($adapter) {
+            $lastSpace = $adapter.LastIndexOf(' ')
+            if ($lastSpace -gt 0) {
+                $part = $adapter.Substring(0, $lastSpace).Trim()
+                if ($part) { return $part }
+            }
+            else { return $adapter }
+        }
+    }
+    # 2) FruId：存储管理 API 的真实序列号字段
+    if ($Pd -and $null -ne $Pd.PSObject.Properties['FruId']) {
+        $fru = ([string]$Pd.FruId).Trim()
+        if ($fru) { return $fru }
+    }
+    # 3) Storage SerialNumber：NGUID 编码形态时尝试转 ASCII
+    if ($Pd -and $null -ne $Pd.PSObject.Properties['SerialNumber']) {
+        $snum = ([string]$Pd.SerialNumber).Trim()
+        if ($snum) {
+            if (Test-LooksLikeNguidEui $snum) {
+                $ascii = ConvertFrom-HexSerial $snum
+                if ($ascii) { return $ascii }
+            }
+            return $snum
+        }
+    }
+    # 4) Win32_DiskDrive 兜底
+    return $Win32Serial
+}
+
 # ── 通道 3：MSFT 存储可靠性计数器（Get-StorageReliabilityCounter，需管理员）──
 function Get-MsftSmart {
     param($Pd)
@@ -548,8 +634,9 @@ $result = @()
 foreach ($d in $wmiDisks) {
     $index = [int]$d.Index
     $model = [string]$d.Model
-    $serial = [string]$d.SerialNumber
-    $pd = Find-PhysicalDiskFor $index $serial $model $pdList
+    $serialRaw = [string]$d.SerialNumber
+    $pd = Find-PhysicalDiskFor $index $serialRaw $model $pdList
+    $serial = Resolve-DiskSerial $serialRaw $pd
     $bus = ''
     $media = ''
     if ($pd) {
