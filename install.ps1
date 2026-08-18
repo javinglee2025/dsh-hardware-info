@@ -45,6 +45,8 @@ param(
     # 安装范围：User（默认）/ Project
     [ValidateSet('User', 'Project')]
     [string]$Scope = 'User',
+    # -Project 为 -Scope Project 的快捷开关（文档示例用法）
+    [switch]$Project,
     # 自定义技能根目录
     [string]$Dir = '',
     # 卸载
@@ -52,6 +54,8 @@ param(
     # 仓库地址
     [string]$RepoUrl = 'https://github.com/javinglee2025/dsh-hardware-info'
 )
+
+if ($Project) { $Scope = 'Project' }
 
 $ErrorActionPreference = 'Stop'
 $skillName = 'dsh-hardware-info'
@@ -74,7 +78,7 @@ function Resolve-TargetDir {
             if ($parent -eq $cur) { break }
             $cur = $parent
         }
-        return (Join-Path (Join-Path $root '.dsh') 'skills')
+        return (Join-Path (Join-Path (Join-Path $root '.dsh') 'skills') $skillName)
     }
     $dshHome = $env:DSH_HOME
     if (-not $dshHome -or -not $dshHome.Trim()) {

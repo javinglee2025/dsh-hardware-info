@@ -94,8 +94,8 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 - `serial_number` 按 MSFT_PhysicalDisk 优先级解析（`AdapterSerialNumber` 剥离尾部
   `_NNNN` 控制器号 > `FruId` > `SerialNumber` 的 NGUID→ASCII 解码 > Win32 兜底）；
   NVMe 盘的 `Win32_DiskDrive.SerialNumber` 为 NGUID 编码形态，不可直接对外引用
-- 部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 恒为 0、读写量为 null：
-  该通道未追踪这些字段，不能据此判断「新盘」；需真实通电时间 / 读写量时走
+- 部分 NVMe 盘经 MSFT 计数器通道时不追踪 `power_on_hours` / 读写量（字段为 null）：
+  不能据此判断「新盘」；需真实通电时间 / 读写量时走
   smartctl（`-d nvme`）通道
 - `health_status = Good` 仅表示三通道合并判级正常，仍应结合属性表观察趋势
   （如重分配扇区、磨损百分比）
@@ -109,7 +109,7 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
   但 `Get-CimInstance Win32_ComputerSystem` 报「无法从客户端中访问 CIM 资源」→ 即命名管道被沙箱拦截
 - **完整 SMART 需要提权**：请用户在管理员 PowerShell 中运行；或使用
   `Start-Process powershell -Verb RunAs`（弹 UAC，用户点「是」）自动提权重跑
-- **`power_on_hours = 0` 但盘已使用很久**：部分 NVMe 盘经 MSFT 计数器通道未追踪该字段，
+- **`power_on_hours` 为 0 或 null 但盘已使用很久**：部分 NVMe 盘经 MSFT 计数器通道未追踪该字段，
   不代表新盘；安装 smartmontools 走 smartctl（`-d nvme`）通道获取真实通电时间与读写量
 - **is_virtual_disk = true**：虚拟盘没有真实 SMART，属预期行为
 - **error 提示需要管理员权限**：MSFT 计数器与 root\WMI 原始属性需要提权；请用户在管理员会话中运行或接受基本信息

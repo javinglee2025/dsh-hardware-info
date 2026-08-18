@@ -15,8 +15,12 @@
 [CmdletBinding()]
 param(
     # 仓库根目录，默认取本脚本所在目录的上一级
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot)
+    # （默认值须在主体内计算：PS 5.1 下带 [CmdletBinding()] 脚本的参数默认值
+    #   表达式中 $PSScriptRoot 为空，直接写在 param 里会在 5.1 崩溃）
+    [string]$RepoRoot = ''
 )
+
+if (-not $RepoRoot) { $RepoRoot = (Split-Path -Parent $PSScriptRoot) }
 
 $ps1Path = Join-Path $RepoRoot 'scripts/Get-DiskHardwareInfo.ps1'
 $tplPath = Join-Path $RepoRoot 'plugin/host.template.js'

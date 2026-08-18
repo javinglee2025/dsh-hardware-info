@@ -39,7 +39,9 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 
 - 属性 ID 为 0 的条目跳过
 - 阈值取自 `MSStorageDriver_ATAPISmartThresholds`（按 InstanceName 对齐，
-  仅一条时直接采用）；类不可用时阈值按 0 处理
+  仅一条时直接采用）；Thresholds 与数据区同为 12 字节/条记录
+  （id + threshold + 保留 10 字节，前 2 字节版本号），阈值取记录内偏移 +1；
+  类不可用时阈值按 0 处理
 - 实例匹配：序列号出现在 InstanceName 中则优先；否则取第一个有效实例
   （InstanceName 格式随存储驱动变化，不可靠）
 
@@ -51,8 +53,10 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 实现同时兼容数字与字符串两种形态。
 
 注意：该计数器对部分 NVMe 盘**不追踪**上电时间与累计读写量（实测
-`power_on_hours` 恒为 0、读写量为 null），不能据此判断「新盘」；此类字段
-以 smartctl NVMe 健康日志为准。
+`power_on_hours` / 读写量为 null），不能据此判断「新盘」；此类字段
+以 smartctl NVMe 健康日志为准。字段为 null 时不生成对应属性条目，
+避免 0 值造成「新盘 / 零磨损」误读；温度兼容摄氏与 Kelvin
+（250..400 减 273）两种上报形态。
 
 ### smartctl JSON
 
@@ -63,6 +67,10 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
   power_cycles、critical_warning 映射为属性条目）
 - 定位顺序：固定安装目录优先（防 PATH 搜索顺序劫持）→ PATH 回退；
   查询顺序：直接 → `-d sat` → `-d nvme`
+- 退出码为位掩码：坏盘（bit3 置位）时 `-A --json` 仍输出完整有效数据，
+  故按 JSON 是否含属性表判定成败，不依赖退出码
+- NVMe `data_units_read/written` 1 单位 = 1000 × 512 字节（规范定义），
+  换算 512 字节 LBA 数用 ×1000
 
 ## 与原生直通机制的差异
 

@@ -152,8 +152,8 @@ Win32_DiskDrive（WMI 基本信息，恒可用）
   `Win32_DiskDrive.SerialNumber` 是 NGUID 编码串（如 `0025_3842_A1B2_C3D4.`），
   不是真实序列号
 
-> **实测注意**：部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 恒为 0、
-> `total_bytes_written/read` 为 null（该通道未追踪这些字段），**不能据此判断是「新盘」**；
+> **实测注意**：部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 与读写量为 null
+> （该通道未追踪这些字段），**不能据此判断是「新盘」**；
 > 需要真实通电时间 / 读写量时，安装 smartmontools 走 smartctl（`-d nvme`）通道。
 
 ## 开发

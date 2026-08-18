@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     提取 Windows 物理磁盘硬件信息（型号、序列号、固件、接口、容量）与 S.M.A.R.T. 健康数据。
@@ -246,7 +246,9 @@ function Get-WmiAtaSmart {
     }
     if (-not $chosen) { return $null }
 
-    # 阈值表（MSStorageDriver_ATAPISmartThresholds；按 InstanceName 对齐，仅一条时直接采用）
+    # 阈值表（MSStorageDriver_ATAPISmartThresholds；按 InstanceName 对齐，仅一条时直接采用）。
+    # Thresholds 与 VendorSpecific 布局一致：前 2 字节版本号 + 30 条 × 12 字节记录，
+    # 每条为 id(1) + threshold(1) + 保留(10)，阈值在记录内偏移 +1
     $thresholds = @{}
     try {
         $tArr = @(Get-CimInstance -Namespace 'root/wmi' -ClassName 'MSStorageDriver_ATAPISmartThresholds' -ErrorAction Stop)
@@ -258,8 +260,11 @@ function Get-WmiAtaSmart {
                 $thBytes = $null
                 if ($th -is [byte[]]) { $thBytes = $th } elseif ($th) { $thBytes = [byte[]]$th }
                 if ($thBytes) {
-                    $limit = if ($thBytes.Length -lt 30) { $thBytes.Length } else { 30 }
-                    for ($i = 0; $i -lt $limit; $i++) { $thresholds[$i] = [int]$thBytes[$i] }
+                    for ($i = 0; $i -lt 30; $i++) {
+                        $o = 2 + $i * 12 + 1
+                        if ($o -ge $thBytes.Length) { break }
+                        $thresholds[$i] = [int]$thBytes[$o]
+                    }
                 }
                 break
             }
@@ -341,7 +346,9 @@ function Test-LooksLikeNguidEui {
 function Get-AsciiFromBytes {
     param([object[]]$Bytes)
     $chars = @($Bytes | Where-Object { ([int]$_ -ge 0x20) -and ([int]$_ -le 0x7E) } | ForEach-Object { [char]$_ })
-    if ($chars.Count -ge 8) { return (($chars -join '').Trim()) }
+    $s = ($chars -join '').Trim()
+    # 序列号只含字母数字与少量分隔符：白名单校验，防止 NGUID 字节序巧合解出乱码「序列号」
+    if ($s.Length -ge 8 -and $s -match '^[A-Za-z0-9._-]+$') { return $s }
     return $null
 }
 
@@ -416,33 +423,44 @@ function Get-MsftSmart {
         if (-not $counter) { return $null }
     } catch { return $null }
 
+    # 字段缺失（null）时跳过对应属性，避免 null 被 [int64] 强转为 0 造成「新盘 / 零磨损」假象
     $attrs = @()
     $temp = $null
     $poh = $null
 
-    $t = [int64]$counter.Temperature
-    if ($t -ge 1 -and $t -le 120) {
-        $temp = $t
-        $attrs += @{ id = 194; name = '温度'; raw_value = $t; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+    if ($null -ne $counter.Temperature) {
+        $t = [int64]$counter.Temperature
+        # 部分存储驱动按 ATA/NVMe 规范以 Kelvin 上报（约 250..400），换算为摄氏
+        if ($t -ge 250 -and $t -le 400) { $t = $t - 273 }
+        if ($t -ge 1 -and $t -le 120) {
+            $temp = $t
+            $attrs += @{ id = 194; name = '温度'; raw_value = $t; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        }
     }
-    $powerOn = [int64]$counter.PowerOnHours
-    if ($powerOn -ge 0) {
-        $poh = $powerOn
-        $attrs += @{ id = 9; name = '上电累计时间'; raw_value = $powerOn; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+    if ($null -ne $counter.PowerOnHours) {
+        $powerOn = [int64]$counter.PowerOnHours
+        if ($powerOn -ge 0) {
+            $poh = $powerOn
+            $attrs += @{ id = 9; name = '上电累计时间'; raw_value = $powerOn; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        }
     }
-    $wear = [int64]$counter.Wear
-    if ($wear -ge 0) {
-        $wearCur = if ($wear -gt 100) { 0 } else { 100 - $wear }
-        $wearStatus = 'Good'
-        if ($wear -ge 100) { $wearStatus = 'Bad' } elseif ($wear -ge 90) { $wearStatus = 'Warning' }
-        $attrs += @{ id = 252; name = '已用寿命百分比'; raw_value = $wear; current = $wearCur; worst = $wearCur; threshold = 90; is_critical = $true; status = $wearStatus }
+    if ($null -ne $counter.Wear) {
+        $wear = [int64]$counter.Wear
+        if ($wear -ge 0) {
+            $wearCur = if ($wear -gt 100) { 0 } else { 100 - $wear }
+            $wearStatus = 'Good'
+            if ($wear -ge 100) { $wearStatus = 'Bad' } elseif ($wear -ge 90) { $wearStatus = 'Warning' }
+            $attrs += @{ id = 252; name = '已用寿命百分比'; raw_value = $wear; current = $wearCur; worst = $wearCur; threshold = 90; is_critical = $true; status = $wearStatus }
+        }
     }
-    $readErr = [int64]$counter.ReadErrorsTotal
-    $writeErr = [int64]$counter.WriteErrorsTotal
-    $totalErr = $readErr + $writeErr
-    $errCurrent = if ($totalErr -eq 0) { 100 } else { 0 }
-    $errStatus = if ($totalErr -gt 0) { 'Warning' } else { 'Good' }
-    $attrs += @{ id = 255; name = '读写错误总计'; raw_value = $totalErr; current = $errCurrent; worst = $errCurrent; threshold = 1; is_critical = $true; status = $errStatus }
+    if ($null -ne $counter.ReadErrorsTotal -or $null -ne $counter.WriteErrorsTotal) {
+        $totalErr = 0
+        if ($null -ne $counter.ReadErrorsTotal) { $totalErr += [int64]$counter.ReadErrorsTotal }
+        if ($null -ne $counter.WriteErrorsTotal) { $totalErr += [int64]$counter.WriteErrorsTotal }
+        $errCurrent = if ($totalErr -eq 0) { 100 } else { 0 }
+        $errStatus = if ($totalErr -gt 0) { 'Warning' } else { 'Good' }
+        $attrs += @{ id = 255; name = '读写错误总计'; raw_value = $totalErr; current = $errCurrent; worst = $errCurrent; threshold = 1; is_critical = $true; status = $errStatus }
+    }
 
     # MSFT_PhysicalDisk.HealthStatus：0=Healthy 1=Warning 2=Unhealthy
     # （部分环境的 cmdlet 返回字符串枚举值，两种形态都兼容）
@@ -492,14 +510,14 @@ function Get-SmartctlSmart {
         ,@('-A', '--json', '-d', 'sat', $dev)
         ,@('-A', '--json', '-d', 'nvme', $dev)
     )
+    # 退出码是位掩码：坏盘（bit3 置位）时 -A --json 仍输出完整有效数据，不能以
+    # 退出码非 0 判失败，按 JSON 是否含属性表判定；无表（如桥接盘直连模式失败）则继续尝试下一直连模式
     foreach ($argsList in $attempts) {
         $outText = ''
-        $code = -1
         try {
             $outText = (& $Exe @argsList 2>$null | Out-String)
-            $code = $LASTEXITCODE
         } catch { }
-        if ($code -ne 0 -or -not $outText) { continue }
+        if (-not $outText) { continue }
         try { $json = $outText | ConvertFrom-Json } catch { continue }
 
         # ATA 属性表（ata_smart_attributes.table）
@@ -563,8 +581,9 @@ function Get-SmartctlSmart {
             $usedStatus = 'Good'
             if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = 'Warning' }
             $attrs += @{ id = 252; name = '已用寿命百分比'; raw_value = $used; current = $usedCur; worst = $usedCur; threshold = 90; is_critical = $true; status = $usedStatus }
-            $attrs += @{ id = 241; name = 'LBA 写入总计'; raw_value = ($writeUnits * 1024); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
-            $attrs += @{ id = 242; name = 'LBA 读取总计'; raw_value = ($readUnits * 1024); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+            # NVMe 数据单位 = 1000 × 512 字节（NVMe 规范），此处换算为 512 字节 LBA 数
+            $attrs += @{ id = 241; name = 'LBA 写入总计'; raw_value = ($writeUnits * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+            $attrs += @{ id = 242; name = 'LBA 读取总计'; raw_value = ($readUnits * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
             $attrs += @{ id = 12; name = '电源周期计数'; raw_value = $cycles; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
             $mediaCur = if ($mediaErr -eq 0) { 100 } else { 0 }
             $mediaStatus = if ($mediaErr -gt 0) { 'Warning' } else { 'Good' }
@@ -573,7 +592,6 @@ function Get-SmartctlSmart {
             $headTemp = if ($tempC -ge 1 -and $tempC -le 120) { $tempC } else { $null }
             return @{ attrs = $attrs; temp = $headTemp; poh = $nvmePoh; health = 'Unknown' }
         }
-        break
     }
     return $null
 }
@@ -717,4 +735,7 @@ foreach ($d in $wmiDisks) {
     }
 }
 
-Write-Output (@($result | Sort-Object index) | ConvertTo-Json -Depth 12 -Compress)
+# 字典键不是 PS 属性（Sort-Object index 解析为空、实际不排序），须用脚本块取值；
+# -InputObject 防止单盘时数组被管道解包成裸 JSON 对象
+$sorted = @($result | Sort-Object { $_.index })
+Write-Output (ConvertTo-Json -InputObject $sorted -Depth 12 -Compress)
