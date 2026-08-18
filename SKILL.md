@@ -9,6 +9,10 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 [FileSystemExplorer](https://github.com/javinglee2025/FileSystemExplorer) 的提取实现，
 经版权方授权以 MIT 许可重新发布；通道设计与判定规则见 `docs/DESIGN.md`。
 
+安装了原生核心 `dskinfo.exe`（兄弟仓库 dskinfo，本技能逻辑的 C#/.NET 10 移植）时，
+插件工具与直接调用都会**自动优先**走原生核心，未安装则使用本仓库 PowerShell 实现——
+两者输出字段一致，见「原生核心 dskinfo.exe」。
+
 ## 何时使用
 
 - 用户询问某块硬盘的型号、序列号、固件版本、接口类型、容量
@@ -19,6 +23,8 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 ## 前置条件
 
 - Windows 主机（PowerShell 5.1+ / pwsh 7+）
+- 原生核心 `dskinfo.exe`（可选，推荐）：存在时插件工具自动优先使用，免去 PowerShell
+  脚本解析开销；探测顺序与安装方式见「原生核心 dskinfo.exe」
 - 基本信息（型号/序列号/容量）：无需管理员
 - NVMe 盘完整 SMART（原生健康日志 IOCTL 直通，含真实通电时间/读写量）：无需管理员；
 - 其他盘完整 SMART（MSFT 计数器 / root\WMI 原始属性 / smartctl）：通常需要管理员权限；
@@ -43,6 +49,65 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 调用 list_physical_disks 列出所有磁盘
 调用 read_disk_smart { driveIndex: 0 } 读取 0 号盘 SMART
 调用 read_disk_smart { driveIndex: 0, useSmartctl: false } 禁用第三方工具
+```
+
+工具返回中的 `source` 字段标记实际提取引擎：`dskinfo.exe`（原生核心）或
+`powershell`（内嵌脚本）；原生核心失败自动回退脚本时附带 `note` 说明原因。
+
+## 原生核心 dskinfo.exe（可选，自动优先）
+
+[dskinfo](https://github.com/javinglee2025/dskinfo) 是本仓库提取逻辑的原生核心版
+（C# / .NET 10）：判定规则、数据通道与本仓库逐一移植同源，以版本化 JSON 契约
+（v1）对外输出，冷启动与解析速度显著优于 PowerShell 脚本。**无需安装即可使用本技能**；
+安装后所有路径自动优先走它。
+
+**探测顺序**（插件每次会话首次调用时探测一次）：
+
+1. `DSKINFO_EXE` 环境变量（推荐设为绝对路径，规避 PATH 劫持面）
+2. PATH 上的 `dskinfo.exe`
+3. 均未命中 → 使用内嵌 PowerShell 脚本（行为不变）
+
+原生核心执行失败（进程崩溃、无输出、JSON 解析失败）时自动回退内嵌脚本重试一次；
+空盘列表属运行环境问题（沙箱拦截 WMI），两引擎同样无解，不回退。
+
+**直接调用**（插件未加载时同样推荐优先 exe）：
+
+```powershell
+# 全部磁盘（身份 + SMART；stdout 输出契约 v1 JSON）
+dskinfo.exe
+
+# 指定盘、只要基本信息（快，无需管理员）
+dskinfo.exe --drive-index 0 --basic
+
+# 离线取证：禁用 smartctl 回退 / 自定义 smartctl 路径
+dskinfo.exe --no-smartctl
+dskinfo.exe --smartctl-path 'D:\tools\smartctl.exe'
+```
+
+参数与 ps1 一一对应（`-DriveIndex` ↔ `--drive-index`、`-Basic` ↔ `--basic`、
+`-NoSmartctl` ↔ `--no-smartctl`、`-SmartctlPath` ↔ `--smartctl-path`）。
+退出码：`0` 正常（含空盘列表/部分盘 SMART 失败）· `1` 未捕获错误 · `3` 环境不可用。
+
+**输出差异**（与 ps1 相比多一层信封）：
+
+```powershell
+# ps1 输出裸数组：(Get-DiskHardwareInfo.ps1 | ConvertFrom-Json) 即磁盘数组
+# exe 输出信封：取 .disks 才是磁盘数组
+$disks = (dskinfo.exe | ConvertFrom-Json).disks
+$disks[0].model; $disks[0].health_status
+```
+
+盘对象字段与 ps1 完全一致（`data_sources`、`attributes[]` 等含义相同），
+完整字段与单位见 dskinfo 仓库 `docs/CONTRACT.md`。
+
+**获取方式**：克隆 dskinfo 仓库后发布自包含单文件（~74MB，零依赖，无需安装 .NET），
+放入 PATH 已有目录或任意位置后设置 `DSKINFO_EXE` 指向它：
+
+```powershell
+git clone https://github.com/javinglee2025/dskinfo.git
+cd dskinfo
+dotnet publish src/DshDiskInfo.Cli -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
+# 产物 publish\dskinfo.exe（复制到 PATH 目录，或设 DSKINFO_EXE 指向它；新开终端生效）
 ```
 
 ## 回退路径：直接执行脚本
@@ -109,6 +174,13 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 
 ## 常见问题排查
 
+- **如何确认工具实际用了哪个引擎**：看返回的 `source` 字段（`dskinfo.exe` /
+  `powershell`）；若为 `powershell` 且带 `note`，说明原生核心执行失败已自动回退
+- **PATH 上明明有 dskinfo.exe，工具却走 powershell**：DSH 宿主会话继承的 PATH/
+  环境变量可能与交互终端不同（插件在会话内只探测一次）。在宿主会话可见的位置设置
+  `DSKINFO_EXE` 绝对路径后重开会话，或接受 ps1 引擎（功能一致）
+- **dskinfo.exe 输出解析不出磁盘数组**：exe 输出带契约 v1 信封
+  （`{"schema_version":1,"disks":[...]}`），需取 `.disks`；ps1 才是裸数组
 - **插件工具返回「未枚举到任何物理磁盘」**：DSH 宿主会话运行在沙箱下时，WMI（DCOM 依赖命名管道）被拦截。
   注意：此时经宿主 shell 直接执行脚本同样会输出空数组 `[]` 或 CimException「无法从客户端中访问 CIM 资源」，
   不要反复重试；让用户在**不受限的 PowerShell 终端**中执行脚本，或在完整访问模式的会话中运行
@@ -133,6 +205,8 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 
 ## 安全注意
 
-- 脚本与工具均为**只读**查询：不写入设备、不修改系统状态
+- 脚本与工具均为**只读**查询：不写入设备、不修改系统状态（dskinfo.exe 同理）
 - 序列号/型号属于设备标识信息：对外报告（尤其公开场合）前先与用户确认脱敏需求
 - smartctl 若只在 PATH 上命中，脚本会以 Verbose 提示搜索顺序劫持风险
+- dskinfo.exe 经 PATH 命中时同理存在搜索顺序劫持面：安全敏感环境用 `DSKINFO_EXE`
+  固定绝对路径，并确认文件来源（官方仓库构建产物）
