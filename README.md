@@ -52,11 +52,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Get-DiskHardwareInfo
 > 命名管道（DCOM/WMI 依赖），工具会返回「未枚举到任何物理磁盘」的提示；
 > 此时改用用法 1 在不受限的 PowerShell 中执行脚本即可获得完整数据。
 
-### 用法 2：DSH 技能（SKILL.md）
+### 用法 2：DSH 技能（SKILL.md）—— 一键安装
 
-把本目录加入 DSH 的技能目录（或经 `skills` 注册），会话内可用技能
-`dsh-hardware-info` 指导 Agent：优先调用插件工具，插件缺失时回退到
-直接执行 `scripts/Get-DiskHardwareInfo.ps1`。
+```powershell
+# 方式 A：从 GitHub 一键安装（无需克隆仓库）
+iwr https://raw.githubusercontent.com/javinglee2025/dsh-hardware-info/main/install.ps1 -OutFile $env:TEMP\install-dsh-hardware-info.ps1; & $env:TEMP\install-dsh-hardware-info.ps1
+
+# 方式 B：克隆仓库后在仓库内安装
+git clone https://github.com/javinglee2025/dsh-hardware-info.git
+.\dsh-hardware-info\install.ps1
+```
+
+安装脚本参数：`-Project`（仅当前项目生效）、`-Dir <目录>`（自定义技能根目录）、
+`-Uninstall`（卸载）。
+
+默认安装到用户级 `~\.dsh\skills\dsh-hardware-info\`（所有会话可用）；DSH 的
+技能文件系统提供商会自动发现并热加载，安装后新会话即可使用技能
+`dsh-hardware-info`。技能会指引 Agent 优先调用插件工具，插件缺失时回退到
+直接执行技能资源目录下的 `scripts/Get-DiskHardwareInfo.ps1`。
 
 ### 用法 3：DSH 动态 Cordis 插件
 

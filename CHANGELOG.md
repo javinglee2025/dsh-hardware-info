@@ -12,6 +12,8 @@
 - Cordis 插件（`plugin/`）：注册 `list_physical_disks` 与 `read_disk_smart` 两个模型工具，
   内嵌提取脚本，零外部文件依赖
 - `tools/sync-hostjs.ps1`：由提取脚本自动重新生成 `plugin/host.js`，避免两份实现漂移
+- `install.ps1`：一键安装/卸载脚本（用户级 `~\.dsh\skills` / 项目级 `.dsh\skills` /
+  自定义目录；支持从 GitHub 下载或本地仓库两种来源，安装后 DSH 自动热加载技能）
 - 文档：README、设计说明（`docs/DESIGN.md`）、版权方授权声明
   （`docs/AUTHORIZATION.md`，含打印签署版 `AUTHORIZATION.html` / `AUTHORIZATION.pdf`）
 
