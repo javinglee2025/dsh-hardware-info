@@ -1,6 +1,6 @@
 ---
 name: dsh-hardware-info
-description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固件版本、接口与总线类型、容量）与 S.M.A.R.T. 健康数据（整体健康状态、温度、上电时间、总读写量、磨损、属性表），多通道回退：Win32_DiskDrive WMI → root\WMI ATA SMART 原始属性 → MSFT 存储可靠性计数器 → smartctl。当用户询问硬盘型号、序列号、SMART 信息、磁盘健康状态或取证设备清单时使用本技能。
+description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固件版本、接口与总线类型、容量）与 S.M.A.R.T. 健康数据（整体健康状态、温度、上电时间、总读写量、磨损、属性表），多通道回退：Win32_DiskDrive WMI（USB 桥盘完整模式另走 SCSI SAT 直通取桥后真实盘体身份）→ root\WMI ATA SMART 原始属性 → MSFT 存储可靠性计数器 → smartctl。当用户询问硬盘型号、序列号、SMART 信息、磁盘健康状态或取证设备清单时使用本技能。
 ---
 
 # 硬盘硬件信息提取（Windows）
@@ -23,6 +23,8 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 - 完整 SMART（MSFT 计数器 / root\WMI 原始属性 / smartctl）：通常需要管理员权限；
   无权限时返回基本信息并附带 error 字段说明
 - smartctl 通道可选：smartmontools 安装于固定目录或 PATH
+- USB 桥接移动硬盘的真实盘体型号/序列号/固件：SCSI SAT 直通通道（需管理员权限
+  与完整语言模式；非管理员或沙箱受限会话下自动跳过，只返回桥上报的通用信息）
 - 宿主会话若运行在沙箱下，WMI 命名管道可能被拦截（判定与绕行见「常见问题排查」）
 
 ## 首选路径：插件工具
@@ -79,7 +81,7 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 | `attributes[]` | SMART 属性表：`id/name/raw_value/current/worst/threshold/is_critical/status` |
 | `failure_predicted` | 是否预示故障（健康为 Bad 时为 true） |
 | `is_virtual_disk` | 虚拟盘（VHD/VMware 等）为 true，虚拟盘跳过 SMART |
-| `data_sources[]` | 实际命中的数据通道（win32_diskdrive / wmi_ata_smart / msft_reliability / smartctl） |
+| `data_sources[]` | 实际命中的数据通道（win32_diskdrive / scsi_sat_passthrough / wmi_ata_smart / msft_reliability / smartctl）；`scsi_sat_passthrough` 表示 USB 桥后真实盘体身份已由 SAT 直通命中 |
 | `error` | 查询失败原因；null 表示成功 |
 
 健康判定要点：
@@ -94,6 +96,10 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 - `serial_number` 按 MSFT_PhysicalDisk 优先级解析（`AdapterSerialNumber` 剥离尾部
   `_NNNN` 控制器号 > `FruId` > `SerialNumber` 的 NGUID→ASCII 解码 > Win32 兜底）；
   NVMe 盘的 `Win32_DiskDrive.SerialNumber` 为 NGUID 编码形态，不可直接对外引用
+- USB 桥接盘的 `model` / `serial_number` 默认来自桥芯片（常为通用名，如
+  `USB3.0 storage USB Device`）；管理员完整模式下脚本经 SCSI SAT 直通自动替换为
+  桥后真实盘体信息（命中时 `data_sources` 含 `scsi_sat_passthrough`），
+  未命中则保留桥上报值
 - 部分 NVMe 盘经 MSFT 计数器通道时不追踪 `power_on_hours` / 读写量（字段为 null）：
   不能据此判断「新盘」；需真实通电时间 / 读写量时走
   smartctl（`-d nvme`）通道
@@ -114,6 +120,11 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 - **is_virtual_disk = true**：虚拟盘没有真实 SMART，属预期行为
 - **error 提示需要管理员权限**：MSFT 计数器与 root\WMI 原始属性需要提权；请用户在管理员会话中运行或接受基本信息
 - **USB 桥接移动硬盘无 SMART**：smartctl 通道会尝试 `-d sat`；安装 smartmontools 可提升成功率
+- **USB 桥接盘型号/序列号是通用桥信息**：管理员权限 + 完整语言模式下脚本经 SCSI SAT
+  直通自动取桥后真实盘体（免 smartmontools）；非管理员或沙箱受限会话该通道跳过，
+  请在不受限的管理员 PowerShell 中运行
+- **`data_sources` 含 `scsi_sat_passthrough`**：USB 桥后真实盘体身份已命中，
+  `model`/`serial_number`/`firmware_revision` 为真实盘体值而非桥信息
 - **data_sources 只有 win32_diskdrive**：三条 SMART 通道全部失败，见 error 字段
 - **序列号为空**：部分 USB 桥 / 虚拟盘不上报序列号，属正常
 

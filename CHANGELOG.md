@@ -2,6 +2,30 @@
 
 本项目采用语义化版本号。每次含逻辑变更的提交应在本文件登记。
 
+## [0.2.0] - 2026-08-18
+
+### 新增
+
+- USB 桥接盘 SCSI SAT 直通身份识别通道（免 smartmontools）：完整模式且盘接口/总线
+  为 USB 时，经 `IOCTL_SCSI_PASS_THROUGH_DIRECT` 发 ATA PASS-THROUGH(16)
+  （CDB 0x85）内嵌 `IDENTIFY DEVICE`(0xEC)
+  穿透桥接，取桥后真实盘体的型号/序列号/固件（与 smartmontools `-d sat` 同一机制；
+  机制设计对齐 FileSystemExplorer）。命中时 `model` / `serial_number` /
+  `firmware_revision` 替换为真实盘体值，`data_sources` 追加
+  `scsi_sat_passthrough`；校验过滤桥芯片假序列号（含 `00000000`、`5C` 前缀、
+  长度 ≤ 6），失败静默回退桥上报信息
+- `-Basic` 模式契约不变（无需管理员）：SAT 直通仅在完整模式尝试；非管理员或
+  受限语言模式（如 DSH 沙箱）下通道自动跳过
+
+### 文档
+
+- README / SKILL / DESIGN 补充 USB 桥 SAT 直通通道说明、`scsi_sat_passthrough`
+  数据源语义与使用前提（管理员权限 + 完整语言模式）
+
+### 其他
+
+- 同步重新生成 `plugin/host.js`
+
 ## [0.1.3] - 2026-08-18
 
 ### 修复

@@ -10,9 +10,12 @@
       序列号按 MSFT_PhysicalDisk 优先级修正（AdapterSerialNumber > FruId >
       SerialNumber(NGUID→ASCII) > Win32 兜底）：NVMe 盘的 Win32_DiskDrive.SerialNumber
       为 NGUID 编码形态，非真实序列号
-      2. MSStorageDriver_ATAPISmartData（root\WMI）  —— ATA SMART 512 字节原始属性（SATA/USB-SATA）
-      3. MSFT_StorageReliabilityCounter              —— 温度、上电时间、磨损、读写错误（NVMe/存储栈，需管理员）
-      4. smartctl.exe（smartmontools，-d sat / -d nvme 回退）—— 完整属性表 / NVMe 健康日志
+      2. SCSI SAT 直通（仅 USB 接口盘，完整模式）   —— 穿透 USB 桥取桥后真实盘体型号/序列号/固件
+      （ATA PASS-THROUGH(16) 内嵌 IDENTIFY DEVICE，需管理员；受限语言模式或
+      非管理员时自动跳过，保留桥上报信息）
+      3. MSStorageDriver_ATAPISmartData（root\WMI）  —— ATA SMART 512 字节原始属性（SATA/USB-SATA）
+      4. MSFT_StorageReliabilityCounter              —— 温度、上电时间、磨损、读写错误（NVMe/存储栈，需管理员）
+      5. smartctl.exe（smartmontools，-d sat / -d nvme 回退）—— 完整属性表 / NVMe 健康日志
     健康评估、属性名称表、温度/上电时间/读写量提取采用业界通用的
     ATA SMART 判定惯例（阈值、温度警戒、最差值合并）。
     stdout 只输出 UTF-8 JSON 数组（每块物理盘一个对象）；诊断信息走 Verbose 流。
@@ -414,6 +417,119 @@ function Resolve-DiskSerial {
     return $Win32Serial
 }
 
+# ── 通道 2：USB 桥 SCSI SAT 直通身份识别（免 smartmontools，需管理员）──
+# Win32/WMI 对 USB 桥接盘只返回桥芯片信息（如 "USB3.0 storage USB Device"），
+# 真实盘体身份须经 SCSI PASS THROUGH DIRECT 发 ATA PASS-THROUGH(16)（CDB 0x85）
+# 内嵌 IDENTIFY DEVICE(0xEC) 穿透桥接（与 smartmontools -d sat 同一机制）。
+# 成功返回 @{ model = ..; serial = ..; fw = .. }，失败返回 $null（保留桥上报信息）。
+function Get-UsbSatIdentity {
+    param([int]$Index)
+
+    # Add-Type 需要完整语言模式：受限语言模式（DSH 沙箱）下编译失败，直接跳过
+    if (-not ('DshDiskProbe' -as [type])) {
+        $src = @"
+using System;
+using System.Runtime.InteropServices;
+public static class DshDiskProbe {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SPTD {
+        public ushort Length;
+        public byte ScsiStatus, PathId, TargetId, Lun, CdbLength, SenseInfoLength, DataIn;
+        public uint DataTransferLength, TimeOutValue;
+        public IntPtr DataBuffer;
+        public uint SenseInfoOffset;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)] public byte[] Cdb;
+    }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "DeviceIoControl")]
+    public static extern bool DeviceIoControlScsi(IntPtr h, uint code, ref SPTD i, uint isz, ref SPTD o, uint osz, out uint ret, IntPtr ov);
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr h);
+}
+"@
+        try { Add-Type -TypeDefinition $src -ErrorAction Stop }
+        catch {
+            Write-Verbose 'SAT 直通: Add-Type 编译失败（受限语言模式或编译环境缺失），跳过通道'
+            return $null
+        }
+    }
+
+    # 打开设备：先读写（SCSI 直通通常需要），失败退回只读
+    $path = ('\\.\PhysicalDrive{0}' -f $Index)
+    $h = [DshDiskProbe]::CreateFileW($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 128, [IntPtr]::Zero)
+    if ($h -eq [IntPtr]::Zero) {
+        $h = [DshDiskProbe]::CreateFileW($path, [uint32]2147483648, 3, [IntPtr]::Zero, 3, 128, [IntPtr]::Zero)
+    }
+    if ($h -eq [IntPtr]::Zero) {
+        Write-Verbose ('SAT 直通: 打开 {0} 失败（可能非管理员），跳过通道' -f $path)
+        return $null
+    }
+
+    # ATA PASS-THROUGH(16) CDB：0x85 | PIO Data-In | T_DIR/BYT_BLOK/512 | COUNT=1 | DEV=0xA0 | CMD=0xEC
+    $cdb = New-Object byte[] 16
+    $cdb[0] = 0x85; $cdb[1] = 8; $cdb[2] = 0x0E; $cdb[6] = 1; $cdb[13] = 0xA0; $cdb[14] = 0xEC
+
+    # USB 桥 SAT 直通偶发返回忙/检查条件（HDD 起旋、虚拟机 USB 透传时更常见），
+    # 重试 3 次（间隔 500ms）提升成功率；每次失败记录 win32/scsiStatus 便于诊断
+    $data = $null
+    $attempt = 1
+    while ($attempt -le 3 -and -not $data) {
+        $s = [DshDiskProbe+SPTD]::new()
+        $s.Length = [System.Runtime.InteropServices.Marshal]::SizeOf([type][DshDiskProbe+SPTD])
+        $s.CdbLength = 16
+        $s.DataIn = 1
+        $s.DataTransferLength = [uint32]512
+        $s.TimeOutValue = [uint32]10
+        $s.Cdb = $cdb
+        $buf = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(512)
+        $s.DataBuffer = $buf
+        $ret = [uint32]0
+        $ok = [DshDiskProbe]::DeviceIoControlScsi($h, 0x4D014, [ref]$s, $s.Length, [ref]$s, $s.Length, [ref]$ret, [IntPtr]::Zero)
+        $werr = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        if ($ok -and $s.ScsiStatus -eq 0) {
+            $data = New-Object byte[] 512
+            [System.Runtime.InteropServices.Marshal]::Copy($buf, $data, 0, 512)
+        }
+        else {
+            Write-Verbose ('SAT 直通: PhysicalDrive{0} 第 {1} 次 IOCTL 未成功（win32={2} scsiStatus={3}）' -f $Index, $attempt, $werr, $s.ScsiStatus)
+            if ($attempt -lt 3) { Start-Sleep -Milliseconds 500 }
+        }
+        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buf)
+        $attempt++
+    }
+    [DshDiskProbe]::CloseHandle($h) | Out-Null
+    if (-not $data) {
+        Write-Verbose ('SAT 直通: PhysicalDrive{0} 重试后仍失败（非 SATA 桥或权限不足），跳过通道' -f $Index)
+        return $null
+    }
+
+    # IDENTIFY DEVICE：model 字节 54..93（40）、serial 20..39（20）、fw 46..53（8），字交换
+    $model = ConvertFrom-AtaString $data 54 40
+    $serial = ConvertFrom-AtaString $data 20 20
+    $fw = ConvertFrom-AtaString $data 46 8
+
+    # 过滤桥芯片生成的假序列号（含 00000000、5C 前缀、过短）与空模型
+    if ($model -and $serial -and $serial.Length -gt 6 -and $serial -notmatch '00000000' -and -not $serial.StartsWith('5C')) {
+        return @{ model = $model; serial = $serial; fw = $fw }
+    }
+    Write-Verbose ('SAT 直通: PhysicalDrive{0} 返回数据校验失败（桥假序列号或空模型），保留桥上报信息' -f $Index)
+    return $null
+}
+
+# ATA 字交换字符串解析：逐字交换高低字节，过滤不可打印字符
+function ConvertFrom-AtaString {
+    param([byte[]]$Data, [int]$Offset, [int]$Length)
+    $sb = New-Object System.Text.StringBuilder
+    for ($i = $Offset; $i -lt ($Offset + $Length); $i += 2) {
+        $c1 = [char]$Data[$i + 1]
+        $c2 = [char]$Data[$i]
+        if ([int]$c1 -gt 32) { [void]$sb.Append($c1) }
+        if ([int]$c2 -gt 32) { [void]$sb.Append($c2) }
+    }
+    return $sb.ToString().Trim()
+}
+
 # ── 通道 3：MSFT 存储可靠性计数器（Get-StorageReliabilityCounter，需管理员）──
 function Get-MsftSmart {
     param($Pd)
@@ -702,6 +818,18 @@ foreach ($d in $wmiDisks) {
     }
     if (-not $media) { $media = [string]$d.MediaType }
 
+    # USB 桥接盘：WMI 只报桥芯片信息，完整模式下尝试 SAT 直通取桥后真实盘体身份
+    # （-Basic 契约「无需管理员」故跳过；非管理员/受限语言模式时函数自动返回 $null）
+    $sat = $null
+    if (-not $Basic -and ([string]$d.InterfaceType -eq 'USB' -or $bus -eq 'USB')) {
+        $sat = Get-UsbSatIdentity $index
+        if ($sat) {
+            Write-Verbose ('IDENTITY: PhysicalDrive{0} USB 桥 SAT 直通命中真实盘体 model={1} serial={2} fw={3}' -f $index, $sat.model, $sat.serial, $sat.fw)
+            $model = $sat.model
+            $serial = $sat.serial
+        }
+    }
+
     $smart = @{ attrs = @(); temp = $null; poh = $null; bw = $null; br = $null; health = 'Unknown'; sources = @(); error = $null }
     if (-not $Basic) {
         $smart = Get-DiskSmart $d $index ([string]$d.PNPDeviceID) $bus ([bool]$NoSmartctl) $SmartctlPath $pd
@@ -711,13 +839,14 @@ foreach ($d in $wmiDisks) {
         if ($status -ieq 'OK') { $smart.health = 'Good' } elseif ($status) { $smart.health = 'Warning' }
     }
     $sources = @('win32_diskdrive') + @($smart.sources)
+    if ($sat) { $sources += 'scsi_sat_passthrough' }
 
     $result += [ordered]@{
         device_id          = ('\\.\PhysicalDrive{0}' -f $index)
         index              = $index
         model              = $model
         serial_number      = $serial
-        firmware_revision  = [string]$d.FirmwareRevision
+        firmware_revision  = if ($sat -and $sat.fw) { $sat.fw } else { [string]$d.FirmwareRevision }
         interface_type     = [string]$d.InterfaceType
         bus_type           = $bus
         media_type         = $media

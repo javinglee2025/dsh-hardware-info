@@ -53,6 +53,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Get-DiskHardwareInfo
 Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\dsh-hardware-info\scripts\Get-DiskHardwareInfo.ps1'
 ```
 
+USB 桥接移动硬盘（硬盘盒 / U 盘）默认只报桥芯片的通用型号与序列号；完整模式
+（不加 `-Basic`）且管理员权限下，脚本会经 SCSI SAT 直通自动穿透桥接，取桥后
+真实盘体的型号/序列号/固件（命中时输出 `data_sources` 含 `scsi_sat_passthrough`）。
+
 > **环境限制提示（实测）**：DSH 插件的工具经宿主 `shell` 服务执行；宿主会话若运行在
 > 文件沙箱下，命名管道（DCOM/WMI 依赖）会被拦截——插件工具返回「未枚举到任何物理磁盘」，
 > 经宿主 shell 直接执行脚本也只会输出空数组 `[]` 或 CimException「无法从客户端中访问 CIM 资源」。

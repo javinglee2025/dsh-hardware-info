@@ -11,6 +11,7 @@
 ```
 Win32_DiskDrive（WMI 基本信息，恒可用）
   ├─ 虚拟盘短路（VHD/VMware 等无真实 SMART，提前返回友好提示）
+  ├─ USB 桥身份识别：SCSI SAT 直通 → 桥后真实盘体型号/序列号/固件（完整模式，需管理员）
   ├─ NVMe：MSFT 存储可靠性计数器 → smartctl（-d nvme）
   └─ ATA ：root\WMI ATA SMART 512 字节原始属性 → MSFT 计数器 → smartctl（-d sat）
 ```
@@ -58,6 +59,21 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 避免 0 值造成「新盘 / 零磨损」误读；温度兼容摄氏与 Kelvin
 （250..400 减 273）两种上报形态。
 
+### USB 桥 SCSI SAT 直通身份识别
+
+Win32/WMI 对 USB 桥接盘只返回桥芯片信息（型号常为通用名、序列号为桥截断值或
+占位符）。完整模式（非 `-Basic`）且盘接口/总线为 USB 时，经
+`IOCTL_SCSI_PASS_THROUGH_DIRECT` 发 ATA PASS-THROUGH(16)（CDB `0x85`，PIO
+Data-In，DEV=0xA0）内嵌 `IDENTIFY DEVICE`(0xEC)，与 smartmontools `-d sat`
+同一机制，免第三方工具。解析：model 字节 54..93（40）、serial 20..39（20）、
+fw 46..53（8），ATA 字交换字符串。校验：模型与序列号非空、序列号长度 > 6、
+不含 `00000000`、不以 `5C` 开头（过滤桥芯片生成的假序列号）；校验失败或
+IOCTL 失败时静默跳过，保留桥上报信息。IOCTL 重试 3 次（间隔 500ms）：
+USB 桥直通偶发返回忙/检查条件（HDD 起旋、虚拟机 USB 透传时更常见）；
+重试后仍失败（非管理员 / 受限语言模式 / 非 SATA 桥）即放弃该通道。
+命中时 `model` / `serial_number` / `firmware_revision` 替换为真实盘体值，
+`data_sources` 追加 `scsi_sat_passthrough`。
+
 ### smartctl JSON
 
 - ATA 属性表：`ata_smart_attributes.table[]`（id/name/value/worst/thresh/raw，
@@ -74,20 +90,23 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 
 ## 与原生直通机制的差异
 
-纯 PowerShell 无法直接构造内核级命令缓冲区，因此：
+纯 PowerShell 原生 cmdlet 无法构造内核级命令缓冲区，因此：
 
-- ATA/NVMe 直通类查询由 Windows 存储栈的 MSFT 计数器通道覆盖
-- 需要完整属性表 / NVMe 健康日志时由 smartctl 通道提供
-  （smartctl 底层使用同一类直通机制，含 USB 桥 SAT 支持）
-- 温度 / 上电时间等关键指标在三个通道间保持同一判定语义
+- SMART 属性类查询由 Windows 存储栈的 MSFT 计数器通道覆盖；
+  完整属性表 / NVMe 健康日志由 smartctl 通道提供（smartctl 底层使用同类直通机制）
+- 例外：USB 桥身份识别经 Add-Type + DeviceIoControl 直接实现 SCSI SAT 直通
+  （仅 IDENTIFY DEVICE 读命令，只读不写；依赖完整语言模式与管理员权限，
+  受限语言模式（DSH 沙箱）下自动跳过）
+- 温度 / 上电时间等关键指标在各通道间保持同一判定语义
 
 ## 实现注意事项
 
 - `Get-PhysicalDisk.DeviceNumber` 在部分环境为空：按盘号 → 序列号 → 型号
   三级回退匹配，避免按盘号错配
 - 序列号含尾部点号（Win32 与 Storage 模块格式差异），匹配前统一 TrimEnd('.')
-- 全部 PowerShell 原生通道对受限语言模式（ConstrainedLanguage）兼容：
-  不依赖 Add-Type、反射或非核心 .NET 静态调用
+- WMI/MSFT/smartctl 通道对受限语言模式（ConstrainedLanguage）兼容：
+  不依赖 Add-Type、反射或非核心 .NET 静态调用；SCSI SAT 直通通道例外——
+  依赖 Add-Type 编译与 DeviceIoControl，受限语言模式下自动跳过（不影响其余通道）
 - stdout 只输出 UTF-8 JSON 数组，诊断信息走 Verbose 流
 - **序列号解析**（对齐 FileSystemExplorer 策略）：NVMe 盘的
   `Win32_DiskDrive.SerialNumber` 为 NGUID 编码形态（十六进制分组，如
