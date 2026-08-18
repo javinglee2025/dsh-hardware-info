@@ -100,15 +100,21 @@ $disks[0].model; $disks[0].health_status
 盘对象字段与 ps1 完全一致（`data_sources`、`attributes[]` 等含义相同），
 完整字段与单位见 dskinfo 仓库 `docs/CONTRACT.md`。
 
-**获取方式**：克隆 dskinfo 仓库后发布自包含单文件（~74MB，零依赖，无需安装 .NET），
-放入 PATH 已有目录或任意位置后设置 `DSKINFO_EXE` 指向它：
+**获取方式**:克隆 dskinfo 仓库后发布 NativeAOT 单文件(2.8MB,零依赖、免装 .NET,
+需本机有 MSVC C++ 与 Windows SDK 组件),放入 PATH 已有目录或任意位置后设置
+`DSKINFO_EXE` 指向它:
 
 ```powershell
 git clone https://github.com/javinglee2025/dskinfo.git
 cd dskinfo
-dotnet publish src/DshDiskInfo.Cli -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
-# 产物 publish\dskinfo.exe（复制到 PATH 目录，或设 DSKINFO_EXE 指向它；新开终端生效）
+dotnet publish src/DshDiskInfo.Cli -c Release -r win-x64 -p:PublishAot=true -p:DskNoWmi=true -o publish-aot
+# 产物 publish-aot\dskinfo.exe(复制到 PATH 目录,或设 DSKINFO_EXE 指向它;新开终端生效)
+# 无 C++ 环境时的备选:--self-contained -p:PublishSingleFile=true(约 74MB,含 WMI 完整回退)
 ```
+
+dskinfo 0.3.0 起核心全直通化(身份/SAT/NVMe/ATA SMART 均 IOCTL 直通),
+`data_sources` 相应新增 `storage_query_property`、`ata_pass_through` 等取值,
+完整语义见其 `docs/CONTRACT.md`。
 
 ## 回退路径：直接执行脚本
 
