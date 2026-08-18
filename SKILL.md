@@ -98,7 +98,9 @@ $disks[0].model; $disks[0].health_status
 ```
 
 盘对象字段与 ps1 完全一致（`data_sources`、`attributes[]` 等含义相同），
-完整字段与单位见 dskinfo 仓库 `docs/CONTRACT.md`。
+完整字段与单位见 dskinfo 仓库 `docs/CONTRACT.md`。唯一已知数值差异是容量语义：
+exe 0.3.1 起为设备上报值（NVMe NSZE / ATA IDENTIFY / GET_LENGTH_INFO），
+ps1 为 WMI 的 `Size`——同盘两者可能相差 ~1e-6（WMI 略小），比对数据时以 exe 为准。
 
 **获取方式**:克隆 dskinfo 仓库后发布 NativeAOT 单文件(2.8MB,零依赖、免装 .NET,
 需本机有 MSVC C++ 与 Windows SDK 组件),放入 PATH 已有目录或任意位置后设置
