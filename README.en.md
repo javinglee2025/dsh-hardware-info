@@ -3,6 +3,10 @@
 [![简体中文](https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-%E5%88%87%E6%8D%A2-blue)](README.md)
 [![English](https://img.shields.io/badge/English-Current-brightgreen)](README.en.md)
 
+> **Translation note**: this English README is machine-translated by AI. If
+> anything differs from the Chinese version, the Chinese
+> [README.md](README.md) is authoritative.
+
 Windows physical disk hardware information extraction: **model / serial number /
 firmware / interface / capacity / S.M.A.R.T. health data**, provided as a
 DeepSeek Harness (DSH) **skill + Cordis plugin** dual package, and usable
