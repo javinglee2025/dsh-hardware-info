@@ -50,6 +50,10 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 1=Warning→Warning、2=Unhealthy→Bad。cmdlet 在部分环境返回字符串枚举值，
 实现同时兼容数字与字符串两种形态。
 
+注意：该计数器对部分 NVMe 盘**不追踪**上电时间与累计读写量（实测
+`power_on_hours` 恒为 0、读写量为 null），不能据此判断「新盘」；此类字段
+以 smartctl NVMe 健康日志为准。
+
 ### smartctl JSON
 
 - ATA 属性表：`ata_smart_attributes.table[]`（id/name/value/worst/thresh/raw，

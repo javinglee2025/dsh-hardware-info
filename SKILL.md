@@ -23,6 +23,7 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 - 完整 SMART（MSFT 计数器 / root\WMI 原始属性 / smartctl）：通常需要管理员权限；
   无权限时返回基本信息并附带 error 字段说明
 - smartctl 通道可选：smartmontools 安装于固定目录或 PATH
+- 宿主会话若运行在沙箱下，WMI 命名管道可能被拦截（判定与绕行见「常见问题排查」）
 
 ## 首选路径：插件工具
 
@@ -88,10 +89,25 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 - 温度：阈值缺省 55°C，≥阈值 Warning，≥阈值+5 Bad
 - 最终健康 = WMI Status × 属性评估 × MSFT PhysicalDisk 健康 三者合并（取最差）
 
+数据解读注意：
+
+- 部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 恒为 0、读写量为 null：
+  该通道未追踪这些字段，不能据此判断「新盘」；需真实通电时间 / 读写量时走
+  smartctl（`-d nvme`）通道
+- `health_status = Good` 仅表示三通道合并判级正常，仍应结合属性表观察趋势
+  （如重分配扇区、磨损百分比）
+
 ## 常见问题排查
 
-- **插件工具返回「未枚举到任何物理磁盘」**：DSH 宿主沙箱可能阻止 WMI（DCOM 依赖命名管道）。
-  改用「回退路径」在不受限的 PowerShell 会话中直接执行脚本即可
+- **插件工具返回「未枚举到任何物理磁盘」**：DSH 宿主会话运行在沙箱下时，WMI（DCOM 依赖命名管道）被拦截。
+  注意：此时经宿主 shell 直接执行脚本同样会输出空数组 `[]` 或 CimException「无法从客户端中访问 CIM 资源」，
+  不要反复重试；让用户在**不受限的 PowerShell 终端**中执行脚本，或在完整访问模式的会话中运行
+- **如何确认是沙箱拦截而非权限/服务问题**：Winmgmt 与 DcomLaunch 服务均在运行，
+  但 `Get-CimInstance Win32_ComputerSystem` 报「无法从客户端中访问 CIM 资源」→ 即命名管道被沙箱拦截
+- **完整 SMART 需要提权**：请用户在管理员 PowerShell 中运行；或使用
+  `Start-Process powershell -Verb RunAs`（弹 UAC，用户点「是」）自动提权重跑
+- **`power_on_hours = 0` 但盘已使用很久**：部分 NVMe 盘经 MSFT 计数器通道未追踪该字段，
+  不代表新盘；安装 smartmontools 走 smartctl（`-d nvme`）通道获取真实通电时间与读写量
 - **is_virtual_disk = true**：虚拟盘没有真实 SMART，属预期行为
 - **error 提示需要管理员权限**：MSFT 计数器与 root\WMI 原始属性需要提权；请用户在管理员会话中运行或接受基本信息
 - **USB 桥接移动硬盘无 SMART**：smartctl 通道会尝试 `-d sat`；安装 smartmontools 可提升成功率

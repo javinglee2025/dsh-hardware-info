@@ -12,3 +12,7 @@ Desktop.ini
 ~$*
 
 # 注意：plugin/host.js 由 tools/sync-hostjs.ps1 生成，但属于发布产物，必须入库，不在此忽略
+
+# 本地产物（含真实序列号 / 个人草稿，不入库）
+smart-output.json
+xiaohongshu-article.md

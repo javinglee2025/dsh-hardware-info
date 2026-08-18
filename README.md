@@ -46,11 +46,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Get-DiskHardwareInfo
 | `-SmartctlPath <path>` | 自定义 smartctl.exe 路径 |
 
 完整 SMART 数据（MSFT 计数器 / root\WMI 原始属性 / smartctl）通常需要**管理员权限**；
-无权限时仍返回身份信息并附带 `error` 说明。
+无权限时仍返回身份信息并附带 `error` 说明。不想手动右键「以管理员身份运行」时，
+可一行命令自动弹 UAC 提权重跑（窗口弹出后点「是」）：
 
-> **环境限制提示**：DSH 插件的工具经宿主 `shell` 服务执行，宿主沙箱若限制
-> 命名管道（DCOM/WMI 依赖），工具会返回「未枚举到任何物理磁盘」的提示；
-> 此时改用用法 1 在不受限的 PowerShell 中执行脚本即可获得完整数据。
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\dsh-hardware-info\scripts\Get-DiskHardwareInfo.ps1'
+```
+
+> **环境限制提示（实测）**：DSH 插件的工具经宿主 `shell` 服务执行；宿主会话若运行在
+> 文件沙箱下，命名管道（DCOM/WMI 依赖）会被拦截——插件工具返回「未枚举到任何物理磁盘」，
+> 经宿主 shell 直接执行脚本也只会输出空数组 `[]` 或 CimException「无法从客户端中访问 CIM 资源」。
+> 此时不要在受限会话里反复重试，改用用法 1 在**不受限的 PowerShell 终端**中执行脚本即可。
+> 快速判定方法：Winmgmt 与 DcomLaunch 服务均在运行，但
+> `Get-CimInstance Win32_ComputerSystem` 报「无法从客户端中访问 CIM 资源」→ 即沙箱拦截命名管道，
+> 与脚本实现、用户权限无关。
 
 ### 用法 2：DSH 技能（SKILL.md）—— 一键安装
 
@@ -122,6 +131,8 @@ git clone https://github.com/javinglee2025/dsh-hardware-info.git
 
 字段与健康判定语义详见 [SKILL.md](SKILL.md) 的「输出解读」章节。
 
+> 公开发布输出（截图 / 文章 / 报告）前，请务必对 `serial_number` 脱敏。
+
 ## 数据通道（多级回退）
 
 ```
@@ -135,6 +146,10 @@ Win32_DiskDrive（WMI 基本信息，恒可用）
   阈值取自 `MSStorageDriver_ATAPISmartThresholds`
 - `MSFT_StorageReliabilityCounter`：温度 / 上电时间 / 磨损 / 读写错误 + 磁盘健康
 - `smartctl -A --json`：完整属性表与 NVMe 健康日志（固定安装目录优先，防 PATH 劫持）
+
+> **实测注意**：部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 恒为 0、
+> `total_bytes_written/read` 为 null（该通道未追踪这些字段），**不能据此判断是「新盘」**；
+> 需要真实通电时间 / 读写量时，安装 smartmontools 走 smartctl（`-d nvme`）通道。
 
 ## 开发
 

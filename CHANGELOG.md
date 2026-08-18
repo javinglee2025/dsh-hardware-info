@@ -2,6 +2,18 @@
 
 本项目采用语义化版本号。每次含逻辑变更的提交应在本文件登记。
 
+## [0.1.1] - 2026-08-18
+
+### 文档
+
+- 补充实测避坑说明：宿主沙箱拦截 WMI 命名管道的现象、判定方法与绕行路径
+  （README / SKILL，含 CimException「无法从客户端中访问 CIM 资源」特征）
+- 补充管理员提权运行方式：管理员 PowerShell，或 `Start-Process powershell -Verb RunAs`
+  一行命令自动弹 UAC 重跑
+- 补充 NVMe 盘经 MSFT 计数器时 `power_on_hours = 0`、读写量为 null 的数据解读注意
+  （不代表新盘，真实值需 smartctl `-d nvme` 通道）
+- 补充输出公开发布前对 `serial_number` 脱敏的提示
+
 ## [0.1.0] - 2026-08-17
 
 ### 新增
