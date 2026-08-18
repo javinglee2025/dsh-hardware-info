@@ -61,8 +61,10 @@ $parseErrors = $null
 $edits = @()
 foreach ($tk in $tokens) {
     $kind = [string]$tk.Kind
+    # 注意：-match/-replace 默认忽略大小写，[\u0080-\uFFFF] 会经 Unicode 折叠
+    # 误匹配 ASCII 的 i/I（折叠到 U+0131），必须用 -cmatch/-creplace 大小写敏感形式
     if ($kind -eq 'StringLiteral' -or $kind -eq 'StringExpandable') {
-        if ($tk.Text -match '[\u0080-\uFFFF]') {
+        if ($tk.Text -cmatch '[\u0080-\uFFFF]') {
             if ($kind -ne 'StringLiteral') {
                 throw ('含非 ASCII 的双引号字符串无法安全转义（插值语义），请改为单引号 + -f 格式化: ' + $tk.Extent.StartLineNumber + ' 行 [' + $tk.Text.Substring(0, [Math]::Min(40, $tk.Text.Length)) + ']')
             }
@@ -71,8 +73,8 @@ foreach ($tk in $tokens) {
         }
     }
     elseif ($kind -eq 'Comment') {
-        if ($tk.Text -match '[\u0080-\uFFFF]') {
-            $edits += ,@($tk.Extent.StartOffset, $tk.Extent.EndOffset, ($tk.Text -replace '[\u0080-\uFFFF]', '?'), $true)
+        if ($tk.Text -cmatch '[\u0080-\uFFFF]') {
+            $edits += ,@($tk.Extent.StartOffset, $tk.Extent.EndOffset, ($tk.Text -creplace '[\u0080-\uFFFF]', '?'), $true)
         }
     }
 }

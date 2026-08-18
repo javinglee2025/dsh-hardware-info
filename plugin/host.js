@@ -35,11 +35,11 @@ function ConvertFrom-UEsc {
 }
 
 
-# ??? ?????????? param ??????? tools/sync-hostjs.ps1 ??? plug?n/host.js ???
+# ??? ?????????? param ??????? tools/sync-hostjs.ps1 ??? plugin/host.js ???
 # ????? param ?????????????????????????????????
 
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
-$ErrorActionPreference = (ConvertFrom-UEsc 'SilentlyContinue')
+$ErrorActionPreference = 'SilentlyContinue'
 
 # ??????????????????????????? ??????ATA SMART ?????????????????????????????????
 
@@ -124,11 +124,11 @@ function Test-CriticalAttr {
     return ($script:CriticalIds -contains $Id)
 }
 
-# ??????????????? > 0 ???? <= ?? ? Bad?<= ??+10 ? Warn?ng?
+# ??????????????? > 0 ???? <= ?? ? Bad?<= ??+10 ? Warning?
 function Get-AttrStatus {
     param([int]$Current, [int]$Threshold)
     if ($Threshold -gt 0 -and $Current -le $Threshold) { return 'Bad' }
-    if ($Current -le ($Threshold + 10)) { return (ConvertFrom-UEsc 'Warning') }
+    if ($Current -le ($Threshold + 10)) { return 'Warning' }
     return 'Good'
 }
 
@@ -136,7 +136,7 @@ function Get-AttrStatus {
 function Merge-Health {
     param([string]$A, [string]$B)
     if ($A -eq 'Bad' -or $B -eq 'Bad') { return 'Bad' }
-    if ($A -eq (ConvertFrom-UEsc 'Warning') -or $B -eq (ConvertFrom-UEsc 'Warning')) { return (ConvertFrom-UEsc 'Warning') }
+    if ($A -eq 'Warning' -or $B -eq 'Warning') { return 'Warning' }
     if ($A -eq 'Good' -and $B -eq 'Good') { return 'Good' }
     if ($A -eq 'Good' -and $B -eq 'Unknown') { return 'Good' }
     if ($A -eq 'Unknown' -and $B -eq 'Good') { return 'Good' }
@@ -152,7 +152,7 @@ function Get-AssessedHealth {
         if ($a.status -eq 'Bad') {
             if ($a.is_critical) { $hasBad = $true } else { $hasWarning = $true }
         }
-        elseif ($a.status -eq (ConvertFrom-UEsc 'Warning')) { $hasWarning = $true }
+        elseif ($a.status -eq 'Warning') { $hasWarning = $true }
         if ($a.id -eq 194 -or $a.id -eq 190) {
             $temp = [int]($a.raw_value -band 0xFF)
             $th = if ($a.threshold -gt 0) { $a.threshold } else { 55 }
@@ -162,7 +162,7 @@ function Get-AssessedHealth {
         }
     }
     if ($hasBad) { return 'Bad' }
-    if ($hasWarning) { return (ConvertFrom-UEsc 'Warning') }
+    if ($hasWarning) { return 'Warning' }
     if (@($Attributes).Count -eq 0) { return 'Unknown' }
     return 'Good'
 }
@@ -179,7 +179,7 @@ function Get-TempFromAttrs {
     return $null
 }
 
-# ??? ?D ????
+# ??? ID ????
 function Get-ValueFromAttrs {
     param($Attributes, [int]$Id)
     foreach ($a in @($Attributes)) {
@@ -188,27 +188,27 @@ function Get-ValueFromAttrs {
     return $null
 }
 
-# ????????? v?rtual/???PNP ? V?RTUAL?SWD\\ ?????
+# ????????? virtual/???PNP ? VIRTUAL?SWD\\ ?????
 function Test-VirtualDisk {
     param([string]$Model, [string]$Pnp, [string]$Bus)
-    if ($Model.ToLowerInvariant().Contains((ConvertFrom-UEsc 'virtual'))) { return $true }
+    if ($Model.ToLowerInvariant().Contains('virtual')) { return $true }
     if ($Model.Contains((ConvertFrom-UEsc '\\u865A\\u62DF'))) { return $true }
     $pnpUpper = $Pnp.ToUpperInvariant()
-    if ($pnpUpper.Contains((ConvertFrom-UEsc 'VIRTUAL'))) { return $true }
+    if ($pnpUpper.Contains('VIRTUAL')) { return $true }
     if ($pnpUpper.StartsWith('SWD\\')) { return $true }
-    if ($Bus -eq (ConvertFrom-UEsc 'File Backed Virtual')) { return $true }
+    if ($Bus -eq 'File Backed Virtual') { return $true }
     return $false
 }
 
-# ?? ?? 2?root\\WM? MSStorageDr?ver_ATAP?SmartData?ATA SMART 512 ?????????
+# ?? ?? 2?root\\WMI MSStorageDriver_ATAPISmartData?ATA SMART 512 ?????????
 function Get-WmiAtaSmart {
     param([string]$Serial)
     try {
-        $entries = @(Get-CimInstance -Namespace (ConvertFrom-UEsc 'root/wmi') -ClassName (ConvertFrom-UEsc 'MSStorageDriver_ATAPISmartData') -ErrorAction Stop)
+        $entries = @(Get-CimInstance -Namespace 'root/wmi' -ClassName 'MSStorageDriver_ATAPISmartData' -ErrorAction Stop)
     } catch { return $null }
     if ($entries.Count -eq 0) { return $null }
 
-    # ??????????nstanceName ????????????????????
+    # ?????????InstanceName ????????????????????
     $chosen = $null
     $chosenInst = ''
     foreach ($e in $entries) {
@@ -228,12 +228,12 @@ function Get-WmiAtaSmart {
     }
     if (-not $chosen) { return $null }
 
-    # ????MSStorageDr?ver_ATAP?SmartThresholds?? ?nstanceName ?????????????
-    # Thresholds ? VendorSpec?f?c ?????? 2 ????? + 30 ? ? 12 ?????
-    # ??? ?d(1) + threshold(1) + ??(10)????????? +1
+    # ????MSStorageDriver_ATAPISmartThresholds?? InstanceName ?????????????
+    # Thresholds ? VendorSpecific ?????? 2 ????? + 30 ? ? 12 ?????
+    # ??? id(1) + threshold(1) + ??(10)????????? +1
     $thresholds = @{}
     try {
-        $tArr = @(Get-CimInstance -Namespace (ConvertFrom-UEsc 'root/wmi') -ClassName (ConvertFrom-UEsc 'MSStorageDriver_ATAPISmartThresholds') -ErrorAction Stop)
+        $tArr = @(Get-CimInstance -Namespace 'root/wmi' -ClassName 'MSStorageDriver_ATAPISmartThresholds' -ErrorAction Stop)
         foreach ($t in $tArr) {
             $tInst = [string]$t.InstanceName
             $match = if ($tArr.Count -eq 1) { $true } else { ($tInst -eq $chosenInst) }
@@ -285,7 +285,7 @@ function Get-WmiAtaSmart {
     return $attrs
 }
 
-# ???/???/???????? Get-Phys?calD?sk ???Dev?ceNumber ????????????????
+# ???/???/???????? Get-PhysicalDisk ???DeviceNumber ????????????????
 function Find-PhysicalDiskFor {
     param([int]$DiskIndex, [string]$Serial, [string]$Model, $PdList)
     foreach ($p in @($PdList)) {
@@ -308,9 +308,9 @@ function Find-PhysicalDiskFor {
     return $null
 }
 
-# ?? ??????????? F?leSystemExplorer???
-# W?n32_D?skDr?ve.Ser?alNumber ? NVMe ??? NGU?D ???????????
-# ?????? MSFT_Phys?calD?sk.AdapterSer?alNumber??????? _NNNN??? Fru?d?
+# ?? ??????????? FileSystemExplorer???
+# Win32_DiskDrive.SerialNumber ? NVMe ??? NGUID ???????????
+# ?????? MSFT_PhysicalDisk.AdapterSerialNumber??????? _NNNN??? FruId?
 
 function Test-LooksLikeNguidEui {
     param([string]$Serial)
@@ -329,7 +329,7 @@ function Get-AsciiFromBytes {
     param([object[]]$Bytes)
     $chars = @($Bytes | Where-Object { ([int]$_ -ge 0x20) -and ([int]$_ -le 0x7E) } | ForEach-Object { [char]$_ })
     $s = ($chars -join '').Trim()
-    # ???????????????????????? NGU?D ??????????????
+    # ???????????????????????? NGUID ??????????????
     if ($s.Length -ge 8 -and $s -match '^[A-Za-z0-9._-]+$') { return $s }
     return $null
 }
@@ -364,8 +364,8 @@ function ConvertFrom-HexSerial {
 
 function Resolve-DiskSerial {
     param([string]$Win32Serial, $Pd)
-    # 1) AdapterSer?alNumber?NVMe ????????? _NNNN?????????
-    if ($Pd -and $null -ne $Pd.PSObject.Properties[(ConvertFrom-UEsc 'AdapterSerialNumber')]) {
+    # 1) AdapterSerialNumber?NVMe ????????? _NNNN?????????
+    if ($Pd -and $null -ne $Pd.PSObject.Properties['AdapterSerialNumber']) {
         $adapter = ([string]$Pd.AdapterSerialNumber).Trim()
         if ($adapter) {
             $lastSpace = $adapter.LastIndexOf(' ')
@@ -376,13 +376,13 @@ function Resolve-DiskSerial {
             else { return $adapter }
         }
     }
-    # 2) Fru?d????? AP? ????????
-    if ($Pd -and $null -ne $Pd.PSObject.Properties[(ConvertFrom-UEsc 'FruId')]) {
+    # 2) FruId????? API ????????
+    if ($Pd -and $null -ne $Pd.PSObject.Properties['FruId']) {
         $fru = ([string]$Pd.FruId).Trim()
         if ($fru) { return $fru }
     }
-    # 3) Storage Ser?alNumber?NGU?D ???????? ASC??
-    if ($Pd -and $null -ne $Pd.PSObject.Properties[(ConvertFrom-UEsc 'SerialNumber')]) {
+    # 3) Storage SerialNumber?NGUID ???????? ASCII
+    if ($Pd -and $null -ne $Pd.PSObject.Properties['SerialNumber']) {
         $snum = ([string]$Pd.SerialNumber).Trim()
         if ($snum) {
             if (Test-LooksLikeNguidEui $snum) {
@@ -392,20 +392,20 @@ function Resolve-DiskSerial {
             return $snum
         }
     }
-    # 4) W?n32_D?skDr?ve ??
+    # 4) Win32_DiskDrive ??
     return $Win32Serial
 }
 
-# ?? ?? 2?USB ? SCS? SAT ???????? smartmontools????????
-# W?n32/WM? ? USB ????????????? "USB3.0 storage USB Dev?ce"??
-# ???????? SCS? PASS THROUGH D?RECT ? ATA PASS-THROUGH(16)?CDB 0x85?
-# ?? ?DENT?FY DEV?CE(0xEC) ?????? smartmontools -d sat ??????
-# ???? @{ model = ..; ser?al = ..; fw = .. }????? $null??????????
+# ?? ?? 2?USB ? SCSI SAT ???????? smartmontools????????
+# Win32/WMI ? USB ????????????? "USB3.0 storage USB Device"??
+# ???????? SCSI PASS THROUGH DIRECT ? ATA PASS-THROUGH(16)?CDB 0x85?
+# ?? IDENTIFY DEVICE(0xEC) ?????? smartmontools -d sat ??????
+# ???? @{ model = ..; serial = ..; fw = .. }????? $null??????????
 function Get-UsbSatIdentity {
     param([int]$Index)
 
     # Add-Type ????????????????DSH ?????????????
-    if (-not ((ConvertFrom-UEsc 'DshDiskProbe') -as [type])) {
+    if (-not ('DshDiskProbe' -as [type])) {
         $src = @"
 using System;
 using System.Runtime.InteropServices;
@@ -434,8 +434,8 @@ public static class DshDiskProbe {
         }
     }
 
-    # ?????????SCS? ??????????????
-    $path = ((ConvertFrom-UEsc '\\\\\\\\.\\\\PhysicalDrive{0}') -f $Index)
+    # ?????????SCSI ??????????????
+    $path = ('\\\\.\\PhysicalDrive{0}' -f $Index)
     $h = [DshDiskProbe]::CreateFileW($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 128, [IntPtr]::Zero)
     if ($h -eq [IntPtr]::Zero) {
         $h = [DshDiskProbe]::CreateFileW($path, [uint32]2147483648, 3, [IntPtr]::Zero, 3, 128, [IntPtr]::Zero)
@@ -445,12 +445,12 @@ public static class DshDiskProbe {
         return $null
     }
 
-    # ATA PASS-THROUGH(16) CDB?0x85 | P?O Data-?n | T_D?R/BYT_BLOK/512 | COUNT=1 | DEV=0xA0 | CMD=0xEC
+    # ATA PASS-THROUGH(16) CDB?0x85 | PIO Data-In | T_DIR/BYT_BLOK/512 | COUNT=1 | DEV=0xA0 | CMD=0xEC
     $cdb = New-Object byte[] 16
     $cdb[0] = 0x85; $cdb[1] = 8; $cdb[2] = 0x0E; $cdb[6] = 1; $cdb[13] = 0xA0; $cdb[14] = 0xEC
 
     # USB ? SAT ???????/?????HDD ?????? USB ????????
-    # ?? 3 ???? 500ms????????????? w?n32/scs?Status ????
+    # ?? 3 ???? 500ms????????????? win32/scsiStatus ????
     $data = $null
     $attempt = 1
     while ($attempt -le 3 -and -not $data) {
@@ -483,7 +483,7 @@ public static class DshDiskProbe {
         return $null
     }
 
-    # ?DENT?FY DEV?CE?model ?? 54..93?40??ser?al 20..39?20??fw 46..53?8?????
+    # IDENTIFY DEVICE?model ?? 54..93?40??serial 20..39?20??fw 46..53?8?????
     $model = ConvertFrom-AtaString $data 54 40
     $serial = ConvertFrom-AtaString $data 20 20
     $fw = ConvertFrom-AtaString $data 46 8
@@ -504,14 +504,14 @@ function ConvertFrom-AtaString {
         $c1 = [char]$Data[$i + 1]
         $c2 = [char]$Data[$i]
         # ?????0x20?????????????? "WDC WD10..."?????
-        # ????????? Tr?m() ??????????
+        # ????????? Trim() ??????????
         if ([int]$c1 -ge 32) { [void]$sb.Append($c1) }
         if ([int]$c2 -ge 32) { [void]$sb.Append($c2) }
     }
     return $sb.ToString().Trim()
 }
 
-# ?? ?? 3?MSFT ?????????Get-StorageRel?ab?l?tyCounter????????
+# ?? ?? 3?MSFT ?????????Get-StorageReliabilityCounter????????
 function Get-MsftSmart {
     param($Pd)
     if (-not $Pd) { return $null }
@@ -520,14 +520,14 @@ function Get-MsftSmart {
         if (-not $counter) { return $null }
     } catch { return $null }
 
-    # ?????null??????????? null ? [?nt64] ??? 0 ????? / ??????
+    # ?????null??????????? null ? [int64] ??? 0 ????? / ??????
     $attrs = @()
     $temp = $null
     $poh = $null
 
     if ($null -ne $counter.Temperature) {
         $t = [int64]$counter.Temperature
-        # ??????? ATA/NVMe ??? Kelv?n ???? 250..400???????
+        # ??????? ATA/NVMe ??? Kelvin ???? 250..400???????
         if ($t -ge 250 -and $t -le 400) { $t = $t - 273 }
         if ($t -ge 1 -and $t -le 120) {
             $temp = $t
@@ -546,7 +546,7 @@ function Get-MsftSmart {
         if ($wear -ge 0) {
             $wearCur = if ($wear -gt 100) { 0 } else { 100 - $wear }
             $wearStatus = 'Good'
-            if ($wear -ge 100) { $wearStatus = 'Bad' } elseif ($wear -ge 90) { $wearStatus = (ConvertFrom-UEsc 'Warning') }
+            if ($wear -ge 100) { $wearStatus = 'Bad' } elseif ($wear -ge 90) { $wearStatus = 'Warning' }
             $attrs += @{ id = 252; name = (ConvertFrom-UEsc '\\u5DF2\\u7528\\u5BFF\\u547D\\u767E\\u5206\\u6BD4'); raw_value = $wear; current = $wearCur; worst = $wearCur; threshold = 90; is_critical = $true; status = $wearStatus }
         }
     }
@@ -555,34 +555,34 @@ function Get-MsftSmart {
         if ($null -ne $counter.ReadErrorsTotal) { $totalErr += [int64]$counter.ReadErrorsTotal }
         if ($null -ne $counter.WriteErrorsTotal) { $totalErr += [int64]$counter.WriteErrorsTotal }
         $errCurrent = if ($totalErr -eq 0) { 100 } else { 0 }
-        $errStatus = if ($totalErr -gt 0) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+        $errStatus = if ($totalErr -gt 0) { 'Warning' } else { 'Good' }
         $attrs += @{ id = 255; name = (ConvertFrom-UEsc '\\u8BFB\\u5199\\u9519\\u8BEF\\u603B\\u8BA1'); raw_value = $totalErr; current = $errCurrent; worst = $errCurrent; threshold = 1; is_critical = $true; status = $errStatus }
     }
 
-    # MSFT_Phys?calD?sk.HealthStatus?0=Healthy 1=Warn?ng 2=Unhealthy
+    # MSFT_PhysicalDisk.HealthStatus?0=Healthy 1=Warning 2=Unhealthy
     # ?????? cmdlet ?????????????????
     $hsRaw = $Pd.HealthStatus
     $health = 'Unknown'
     if ($hsRaw -is [string]) {
         $hsStr = [string]$hsRaw
         if ($hsStr -eq 'Healthy') { $health = 'Good' }
-        elseif ($hsStr -eq (ConvertFrom-UEsc 'Warning')) { $health = (ConvertFrom-UEsc 'Warning') }
+        elseif ($hsStr -eq 'Warning') { $health = 'Warning' }
         elseif ($hsStr -eq 'Unhealthy') { $health = 'Bad' }
     }
     else {
         $hs = [int64]$hsRaw
         if ($hs -eq 0) { $health = 'Good' }
-        elseif ($hs -eq 1) { $health = (ConvertFrom-UEsc 'Warning') }
+        elseif ($hs -eq 1) { $health = 'Warning' }
         elseif ($hs -eq 2) { $health = 'Bad' }
     }
     return @{ attrs = $attrs; temp = $temp; poh = $poh; health = $health }
 }
 
-# ?? ?? 4?NVMe ????????OCTL_STORAGE_QUERY_PROPERTY ???? smartctl???
-# ?? F?leSystemExplorer ? NVMe ?????Dev?ce?oControl + StorageDev?ceProtocolSpec?f?cProperty
-# ?? NVMe SMART/Health ?nformat?on Log Page (02h)?STORAGE_PROTOCOL_SPEC?F?C_DATA
-# ? STORAGE_PROPERTY_QUERY.Add?t?onalParameters??? 8?????????????
-# ? ProtocolSpec?f?cData ??????F?LE_ANY_ACCESS ???????????????
+# ?? ?? 4?NVMe ???????IOCTL_STORAGE_QUERY_PROPERTY ???? smartctl???
+# ?? FileSystemExplorer ? NVMe ?????DeviceIoControl + StorageDeviceProtocolSpecificProperty
+# ?? NVMe SMART/Health Information Log Page (02h)?STORAGE_PROTOCOL_SPECIFIC_DATA
+# ? STORAGE_PROPERTY_QUERY.AdditionalParameters??? 8?????????????
+# ? ProtocolSpecificData ??????FILE_ANY_ACCESS ???????????????
 # ??????????????
 function Get-NvmeSmartNative {
     param([int]$Index)
@@ -664,7 +664,7 @@ public static class DshNvmeProbe {
         foreach ($b in $log) { $sum += $b }
         if ($sum -eq 0) { return $null }
 
-        # NVMe SMART/Health Log (02h) ???128-b?t ???? 64 ????????
+        # NVMe SMART/Health Log (02h) ???128-bit ???? 64 ????????
         $critWarn = [int]$log[0]
         $tempK = [BitConverter]::ToUInt16($log, 1)
         $spare = [int]$log[3]
@@ -684,16 +684,16 @@ public static class DshNvmeProbe {
         $critStatus = if ($critWarn -ne 0) { 'Bad' } else { 'Good' }
         $attrs += @{ id = 250; name = (ConvertFrom-UEsc '\\u4E25\\u91CD\\u8B66\\u544A\\u6807\\u5FD7'); raw_value = $critWarn; current = $critCur; worst = $critCur; threshold = 1; is_critical = $true; status = $critStatus }
         $spareStatus = 'Good'
-        if ($spare -le $spareTh) { $spareStatus = 'Bad' } elseif ($spare -lt 10) { $spareStatus = (ConvertFrom-UEsc 'Warning') }
+        if ($spare -le $spareTh) { $spareStatus = 'Bad' } elseif ($spare -lt 10) { $spareStatus = 'Warning' }
         $attrs += @{ id = 251; name = (ConvertFrom-UEsc '\\u53EF\\u7528\\u5907\\u7528\\u7A7A\\u95F4'); raw_value = $spare; current = $spare; worst = $spare; threshold = $spareTh; is_critical = $true; status = $spareStatus }
         $usedCur = if ($used -gt 100) { 0 } else { 100 - $used }
         $usedStatus = 'Good'
-        if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = (ConvertFrom-UEsc 'Warning') }
+        if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = 'Warning' }
         $attrs += @{ id = 252; name = (ConvertFrom-UEsc '\\u5DF2\\u7528\\u5BFF\\u547D\\u767E\\u5206\\u6BD4'); raw_value = $used; current = $usedCur; worst = $usedCur; threshold = 90; is_critical = $true; status = $usedStatus }
         if ($null -ne $tempC) {
             $tempCurrent = if ($tempC -lt 50) { 100 } else { 100 - ($tempC - 50) }
             if ($tempCurrent -lt 0) { $tempCurrent = 0 }
-            $tempStatus = if ($tempC -ge 55) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+            $tempStatus = if ($tempC -ge 55) { 'Warning' } else { 'Good' }
             $attrs += @{ id = 194; name = (ConvertFrom-UEsc '\\u6E29\\u5EA6'); raw_value = $tempC; current = $tempCurrent; worst = $tempCurrent; threshold = 55; is_critical = $false; status = $tempStatus }
         }
         $attrs += @{ id = 9; name = (ConvertFrom-UEsc '\\u4E0A\\u7535\\u7D2F\\u8BA1\\u65F6\\u95F4'); raw_value = $powerOnHours; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
@@ -701,7 +701,7 @@ public static class DshNvmeProbe {
         $attrs += @{ id = 241; name = (ConvertFrom-UEsc 'LBA \\u5199\\u5165\\u603B\\u8BA1'); raw_value = ($dataUnitsWritten * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
         $attrs += @{ id = 242; name = (ConvertFrom-UEsc 'LBA \\u8BFB\\u53D6\\u603B\\u8BA1'); raw_value = ($dataUnitsRead * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
         $mediaCur = if ($mediaErrors -eq 0) { 100 } else { 0 }
-        $mediaStatus = if ($mediaErrors -gt 0) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+        $mediaStatus = if ($mediaErrors -gt 0) { 'Warning' } else { 'Good' }
         $attrs += @{ id = 255; name = (ConvertFrom-UEsc '\\u4ECB\\u8D28\\u9519\\u8BEF\\u8BA1\\u6570'); raw_value = $mediaErrors; current = $mediaCur; worst = $mediaCur; threshold = 1; is_critical = $true; status = $mediaStatus }
         return @{ attrs = $attrs; temp = $tempC; poh = $powerOnHours; health = 'Unknown' }
     }
@@ -716,10 +716,10 @@ function Resolve-Smartctl {
     param([string]$CustomPath)
     if ($CustomPath -and (Test-Path -LiteralPath $CustomPath)) { return $CustomPath }
     $fixed = @(
-        (ConvertFrom-UEsc 'C:\\\\Program Files\\\\smartmontools\\\\bin\\\\smartctl.exe')
-        (ConvertFrom-UEsc 'C:\\\\Program Files (x86)\\\\smartmontools\\\\bin\\\\smartctl.exe')
-        (ConvertFrom-UEsc 'C:\\\\smartmontools\\\\bin\\\\smartctl.exe')
-        (ConvertFrom-UEsc 'C:\\\\ProgramData\\\\chocolatey\\\\bin\\\\smartctl.exe')
+        'C:\\Program Files\\smartmontools\\bin\\smartctl.exe'
+        'C:\\Program Files (x86)\\smartmontools\\bin\\smartctl.exe'
+        'C:\\smartmontools\\bin\\smartctl.exe'
+        'C:\\ProgramData\\chocolatey\\bin\\smartctl.exe'
     )
     foreach ($p in $fixed) { if (Test-Path -LiteralPath $p) { return $p } }
     $cmd = Get-Command smartctl -ErrorAction SilentlyContinue
@@ -734,13 +734,13 @@ function Resolve-Smartctl {
 function Get-SmartctlSmart {
     param([int]$Index, [string]$Exe)
     if (-not $Exe) { return $null }
-    $dev = ((ConvertFrom-UEsc '\\\\\\\\.\\\\PhysicalDrive{0}') -f $Index)
+    $dev = ('\\\\.\\PhysicalDrive{0}' -f $Index)
     $attempts = @(
         ,@('-A', '--json', $dev)
         ,@('-A', '--json', '-d', 'sat', $dev)
         ,@('-A', '--json', '-d', 'nvme', $dev)
     )
-    # ???????????b?t3 ???? -A --json ?????????????
+    # ???????????bit3 ???? -A --json ?????????????
     # ???? 0 ????? JSON ??????????????????????????????????
     foreach ($argsList in $attempts) {
         $outText = ''
@@ -750,7 +750,7 @@ function Get-SmartctlSmart {
         if (-not $outText) { continue }
         try { $json = $outText | ConvertFrom-Json } catch { continue }
 
-        # ATA ????ata_smart_attr?butes.table?
+        # ATA ????ata_smart_attributes.table?
         if ($json.ata_smart_attributes -and $json.ata_smart_attributes.table) {
             $attrs = @()
             foreach ($entry in @($json.ata_smart_attributes.table)) {
@@ -781,7 +781,7 @@ function Get-SmartctlSmart {
             if ($attrs.Count -gt 0) { return @{ attrs = $attrs; temp = $null; poh = $null; health = 'Unknown' } }
         }
 
-        # NVMe ???????nvme_smart_health_?nformat?on_log?
+        # NVMe ???????nvme_smart_health_information_log?
         if ($json.nvme_smart_health_information_log) {
             $n = $json.nvme_smart_health_information_log
             $tempC = if ($null -ne $n.temperature) { [int]$n.temperature } else { 0 }
@@ -798,25 +798,25 @@ function Get-SmartctlSmart {
             $attrs = @()
             $tempCurrent = if ($tempC -lt 50) { 100 } else { 100 - ($tempC - 50) }
             if ($tempCurrent -lt 0) { $tempCurrent = 0 }
-            $tempStatus = if ($tempC -ge 55) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+            $tempStatus = if ($tempC -ge 55) { 'Warning' } else { 'Good' }
             $attrs += @{ id = 194; name = (ConvertFrom-UEsc '\\u6E29\\u5EA6'); raw_value = $tempC; current = $tempCurrent; worst = $tempCurrent; threshold = 55; is_critical = $false; status = $tempStatus }
             $attrs += @{ id = 9; name = (ConvertFrom-UEsc '\\u4E0A\\u7535\\u7D2F\\u8BA1\\u65F6\\u95F4'); raw_value = $nvmePoh; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
             $critCur = if ($critWarn -eq 0) { 100 } else { 0 }
             $critStatus = if ($critWarn -ne 0) { 'Bad' } else { 'Good' }
             $attrs += @{ id = 250; name = (ConvertFrom-UEsc '\\u4E25\\u91CD\\u8B66\\u544A\\u6807\\u5FD7'); raw_value = $critWarn; current = $critCur; worst = $critCur; threshold = 1; is_critical = $true; status = $critStatus }
             $spareStatus = 'Good'
-            if ($spare -le $spareTh) { $spareStatus = 'Bad' } elseif ($spare -lt 10) { $spareStatus = (ConvertFrom-UEsc 'Warning') }
+            if ($spare -le $spareTh) { $spareStatus = 'Bad' } elseif ($spare -lt 10) { $spareStatus = 'Warning' }
             $attrs += @{ id = 251; name = (ConvertFrom-UEsc '\\u53EF\\u7528\\u5907\\u7528\\u7A7A\\u95F4'); raw_value = $spare; current = $spare; worst = $spare; threshold = $spareTh; is_critical = $true; status = $spareStatus }
             $usedCur = if ($used -gt 100) { 0 } else { 100 - $used }
             $usedStatus = 'Good'
-            if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = (ConvertFrom-UEsc 'Warning') }
+            if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = 'Warning' }
             $attrs += @{ id = 252; name = (ConvertFrom-UEsc '\\u5DF2\\u7528\\u5BFF\\u547D\\u767E\\u5206\\u6BD4'); raw_value = $used; current = $usedCur; worst = $usedCur; threshold = 90; is_critical = $true; status = $usedStatus }
             # NVMe ???? = 1000 ? 512 ???NVMe ????????? 512 ?? LBA ?
             $attrs += @{ id = 241; name = (ConvertFrom-UEsc 'LBA \\u5199\\u5165\\u603B\\u8BA1'); raw_value = ($writeUnits * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
             $attrs += @{ id = 242; name = (ConvertFrom-UEsc 'LBA \\u8BFB\\u53D6\\u603B\\u8BA1'); raw_value = ($readUnits * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
             $attrs += @{ id = 12; name = (ConvertFrom-UEsc '\\u7535\\u6E90\\u5468\\u671F\\u8BA1\\u6570'); raw_value = $cycles; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
             $mediaCur = if ($mediaErr -eq 0) { 100 } else { 0 }
-            $mediaStatus = if ($mediaErr -gt 0) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+            $mediaStatus = if ($mediaErr -gt 0) { 'Warning' } else { 'Good' }
             $attrs += @{ id = 255; name = (ConvertFrom-UEsc '\\u4ECB\\u8D28\\u9519\\u8BEF\\u8BA1\\u6570'); raw_value = $mediaErr; current = $mediaCur; worst = $mediaCur; threshold = 1; is_critical = $true; status = $mediaStatus }
 
             $headTemp = if ($tempC -ge 1 -and $tempC -le 120) { $tempC } else { $null }
@@ -837,38 +837,38 @@ function Get-DiskSmart {
         return @{ attrs = @(); temp = $null; poh = $null; bw = $null; br = $null; health = 'Unknown'; sources = @(); error = (ConvertFrom-UEsc '\\u865A\\u62DF\\u78C1\\u76D8\\u4E0D\\u652F\\u6301 S.M.A.R.T. \\u76D1\\u63A7') }
     }
 
-    # NVMe ????nterfaceType ?? SCS????? PNPDev?ce?D ???????
+    # NVMe ???InterfaceType ?? SCSI???? PNPDeviceID ???????
     $isNvme = ($Bus -eq 'NVMe') -or $Pnp.ToUpperInvariant().Contains('NVME')
 
     $attrs = @()
     $sources = @()
     $msftHealth = 'Unknown'
 
-    # ATA/SATA??? root\\WM? ??????OCTL ATA PASS THROUGH ? PowerShell ????
+    # ATA/SATA??? root\\WMI ?????IOCTL ATA PASS THROUGH ? PowerShell ????
     if (-not $isNvme) {
         Write-Verbose ((ConvertFrom-UEsc 'SMART: PhysicalDrive{0} \\u8D70 WMI ATA SMART \\u901A\\u9053') -f $Index)
         $wmiAttrs = Get-WmiAtaSmart $serial
-        if ($wmiAttrs -and @($wmiAttrs).Count -gt 0) { $attrs = @($wmiAttrs); $sources += (ConvertFrom-UEsc 'wmi_ata_smart') }
+        if ($wmiAttrs -and @($wmiAttrs).Count -gt 0) { $attrs = @($wmiAttrs); $sources += 'wmi_ata_smart' }
     }
 
-    # NVMe????????? ?OCTL ??????????/????? smartctl?
+    # NVMe????????? IOCTL ??????????/????? smartctl?
     if ($isNvme -and @($attrs).Count -eq 0) {
         Write-Verbose ((ConvertFrom-UEsc 'SMART: PhysicalDrive{0} \\u8D70 NVMe \\u539F\\u751F\\u5065\\u5EB7\\u65E5\\u5FD7\\u901A\\u9053\\uFF08IOCTL \\u76F4\\u901A\\uFF09') -f $Index)
         $nvmeNative = Get-NvmeSmartNative $Index
         if ($nvmeNative -and @($nvmeNative.attrs).Count -gt 0) {
             $attrs = @($nvmeNative.attrs)
-            $sources += (ConvertFrom-UEsc 'nvme_ioctl')
+            $sources += 'nvme_ioctl'
         }
     }
 
-    # MSFT ?????????NVMe ???? / WM? ???????
+    # MSFT ?????????NVMe ???? / WMI ???????
     if (@($attrs).Count -eq 0) {
         Write-Verbose ((ConvertFrom-UEsc 'SMART: PhysicalDrive{0} \\u5C1D\\u8BD5 MSFT \\u5B58\\u50A8\\u53EF\\u9760\\u6027\\u8BA1\\u6570\\u5668') -f $Index)
         $msft = Get-MsftSmart $Pd
         if ($msft -and @($msft.attrs).Count -gt 0) {
             $attrs = @($msft.attrs)
             $msftHealth = $msft.health
-            $sources += (ConvertFrom-UEsc 'msft_reliability')
+            $sources += 'msft_reliability'
         }
     }
 
@@ -889,10 +889,10 @@ function Get-DiskSmart {
     if ($null -ne $bwRaw) { $bw = [int64]$bwRaw * 512 }
     if ($null -ne $brRaw) { $br = [int64]$brRaw * 512 }
 
-    # ?????WM? Status OK ? Good?
+    # ?????WMI Status OK ? Good?
     $baseHealth = 'Unknown'
     $status = [string]$Disk.Status
-    if ($status -ieq 'OK') { $baseHealth = 'Good' } elseif ($status) { $baseHealth = (ConvertFrom-UEsc 'Warning') }
+    if ($status -ieq 'OK') { $baseHealth = 'Good' } elseif ($status) { $baseHealth = 'Warning' }
 
     $error = $null
     if (@($attrs).Count -eq 0) {
@@ -910,7 +910,7 @@ function Get-DiskSmart {
 
 Write-Verbose ((ConvertFrom-UEsc 'SMART: \\u5F00\\u59CB\\u679A\\u4E3E\\u7269\\u7406\\u78C1\\u76D8\\uFF08Basic={0}\\uFF0CNoSmartctl={1}\\uFF09') -f $Basic, $NoSmartctl)
 
-$wmiDisks = @(Get-CimInstance -ClassName (ConvertFrom-UEsc 'Win32_DiskDrive') -ErrorAction SilentlyContinue)
+$wmiDisks = @(Get-CimInstance -ClassName 'Win32_DiskDrive' -ErrorAction SilentlyContinue)
 if ($DriveIndex.Count -gt 0) {
     $wmiDisks = @($wmiDisks | Where-Object { $DriveIndex -contains [int]$_.Index })
 }
@@ -919,7 +919,7 @@ if ($wmiDisks.Count -eq 0) {
     exit 0
 }
 
-# Get-Phys?calD?sk ???????/????????/???/???????
+# Get-PhysicalDisk ???????/????????/???/???????
 $pdList = @()
 try {
     $pdList = @(Get-PhysicalDisk -ErrorAction Stop)
@@ -942,8 +942,8 @@ foreach ($d in $wmiDisks) {
     }
     if (-not $media) { $media = [string]$d.MediaType }
 
-    # USB ????WM? ??????????????? SAT ???????????
-    # ?-Bas?c ?????????????????/????????????? $null?
+    # USB ????WMI ??????????????? SAT ???????????
+    # ?-Basic ?????????????????/????????????? $null?
     $sat = $null
     if (-not $Basic -and ([string]$d.InterfaceType -eq 'USB' -or $bus -eq 'USB')) {
         $sat = Get-UsbSatIdentity $index
@@ -960,13 +960,13 @@ foreach ($d in $wmiDisks) {
     }
     else {
         $status = [string]$d.Status
-        if ($status -ieq 'OK') { $smart.health = 'Good' } elseif ($status) { $smart.health = (ConvertFrom-UEsc 'Warning') }
+        if ($status -ieq 'OK') { $smart.health = 'Good' } elseif ($status) { $smart.health = 'Warning' }
     }
-    $sources = @((ConvertFrom-UEsc 'win32_diskdrive')) + @($smart.sources)
-    if ($sat) { $sources += (ConvertFrom-UEsc 'scsi_sat_passthrough') }
+    $sources = @('win32_diskdrive') + @($smart.sources)
+    if ($sat) { $sources += 'scsi_sat_passthrough' }
 
     $result += [ordered]@{
-        device_id          = ((ConvertFrom-UEsc '\\\\\\\\.\\\\PhysicalDrive{0}') -f $index)
+        device_id          = ('\\\\.\\PhysicalDrive{0}' -f $index)
         index              = $index
         model              = $model
         serial_number      = $serial
@@ -988,8 +988,8 @@ foreach ($d in $wmiDisks) {
     }
 }
 
-# ????? PS ???Sort-Object ?ndex ????????????????????
-# -?nputObject ?????????????? JSON ??
+# ????? PS ???Sort-Object index ????????????????????
+# -InputObject ?????????????? JSON ??
 $sorted = @($result | Sort-Object { $_.index })
 Write-Output (ConvertTo-Json -InputObject $sorted -Depth 12 -Compress)
 `
