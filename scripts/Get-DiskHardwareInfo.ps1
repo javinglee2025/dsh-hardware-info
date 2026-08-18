@@ -524,8 +524,10 @@ function ConvertFrom-AtaString {
     for ($i = $Offset; $i -lt ($Offset + $Length); $i += 2) {
         $c1 = [char]$Data[$i + 1]
         $c2 = [char]$Data[$i]
-        if ([int]$c1 -gt 32) { [void]$sb.Append($c1) }
-        if ([int]$c2 -gt 32) { [void]$sb.Append($c2) }
+        # 保留空格（0x20）：型号中的品牌分隔空格（如 "WDC WD10..."）应保留，
+        # 首尾填充空格由末尾 Trim() 处理；仅过滤控制字符
+        if ([int]$c1 -ge 32) { [void]$sb.Append($c1) }
+        if ([int]$c2 -ge 32) { [void]$sb.Append($c2) }
     }
     return $sb.ToString().Trim()
 }

@@ -79,6 +79,10 @@ git clone https://github.com/javinglee2025/dsh-hardware-info.git
 安装脚本参数：`-Project`（仅当前项目生效）、`-Dir <目录>`（自定义技能根目录）、
 `-Uninstall`（卸载）。
 
+> **升级**：仓库更新后需重跑 `install.ps1` 刷新已安装副本——`~\.dsh\skills` 下的
+> 技能文件是安装时的快照，不会随仓库自动更新；DSH 会话中的动态插件同理，
+> 需用新版 `plugin/host.js` 内容重新定义 `code.host`。
+
 默认安装到用户级 `~\.dsh\skills\dsh-hardware-info\`（所有会话可用）；DSH 的
 技能文件系统提供商会自动发现并热加载，安装后新会话即可使用技能
 `dsh-hardware-info`。技能会指引 Agent 优先调用插件工具，插件缺失时回退到
@@ -169,6 +173,12 @@ Win32_DiskDrive（WMI 基本信息，恒可用）
 
 注意：`plugin/host.js` 是生成产物，不要手改；两个 .ps1 文件含中文注释，
 按 Windows PowerShell 5.1 惯例保存为 UTF-8 with BOM。
+
+`sync-hostjs.ps1` 会把内嵌主体自动 **ASCII 化**（中文字符串转 `\uXXXX` +
+运行时解码，注释非 ASCII 替换为 `?`）：宿主 shell 以无 BOM UTF-8 / 管道传递
+命令时，Windows PowerShell 5.1 在非 UTF-8 系统区域下按 ANSI 读取含中文主体会
+解析崩溃，纯 ASCII 主体在任何传递编码下免疫。源码规约：中文一律单引号字符串 +
+`-f` 格式化；含中文的双引号插值字符串 / here-string 会使构建直接报错。
 
 ## 许可
 

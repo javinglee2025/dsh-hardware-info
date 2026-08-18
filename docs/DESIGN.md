@@ -108,6 +108,15 @@ USB 桥直通偶发返回忙/检查条件（HDD 起旋、虚拟机 USB 透传时
   不依赖 Add-Type、反射或非核心 .NET 静态调用；SCSI SAT 直通通道例外——
   依赖 Add-Type 编译与 DeviceIoControl，受限语言模式下自动跳过（不影响其余通道）
 - stdout 只输出 UTF-8 JSON 数组，诊断信息走 Verbose 流
+- **插件内嵌主体 ASCII 化**：`sync-hostjs.ps1` 生成 `plugin/host.js` 时自动把
+  主体中的中文（单引号字符串）转义为 `\uXXXX` 并在主体开头注入运行时解码函数
+  `ConvertFrom-UEsc`，注释中的非 ASCII 替换为 `?`，转换后断言纯 ASCII。
+  原因：宿主 shell 若以无 BOM UTF-8 临时文件 / 管道传递命令，Windows
+  PowerShell 5.1 在非 UTF-8 系统区域下按 ANSI 读取，GBK 双字节会吞掉
+  引号/换行导致解析崩溃（`.ps1` 文件本身的 UTF-8 BOM 修复覆盖不到该路径）；
+  纯 ASCII 是 UTF-8 与所有 ANSI 代码页的公共子集，任何传递方式下免疫。
+  源码规约：中文一律用单引号字符串 + `-f` 格式化，不用含中文的双引号
+  插值字符串 / here-string（构建时会直接报错）
 - **序列号解析**（对齐 FileSystemExplorer 策略）：NVMe 盘的
   `Win32_DiskDrive.SerialNumber` 为 NGUID 编码形态（十六进制分组，如
   `0025_3842_A1B2_C3D4.`），并非真实序列号。解析优先级：
