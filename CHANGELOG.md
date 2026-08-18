@@ -2,6 +2,31 @@
 
 本项目采用语义化版本号。每次含逻辑变更的提交应在本文件登记。
 
+## [0.2.2] - 2026-08-18
+
+### 新增
+
+- NVMe 原生健康日志通道（免 smartctl、免提权）：经
+  `IOCTL_STORAGE_QUERY_PROPERTY`（StorageDeviceProtocolSpecificProperty，
+  Log Page 02h）直通读取 NVMe SMART/Health 日志——真实通电时间、电源周期、
+  温度、读写量、备用空间、寿命百分比、严重警告标志、介质错误。
+  实现对齐 FileSystemExplorer 的 NVMe 直通实现（设备以零访问权限打开，
+  FILE_ANY_ACCESS 查询类 IOCTL 未提权即可成功，实测免提权命中）。
+  通道顺序：NVMe 盘优先原生直通（`data_sources` 含 `nvme_ioctl`），
+  失败回退 MSFT 计数器，再回退 smartctl；ATA/SCSI 链不变
+
+### 修复
+
+- NVMe 盘经 MSFT 计数器通道时 `power_on_hours` / 读写量为 null 的遗留问题
+  （MSFT 通道不追踪这些字段）：此前被误判为「新盘」或要求安装 smartmontools，
+  现原生直通通道免提权直接给出真实值
+
+### 实测
+
+- 免提权运行：ZHITAI TiPro9000 4TB 通电 6525 小时 / 写入 29.8 TB / 读取 42.1 TB /
+  电源周期 458 / 温度 50°C；Samsung 990 PRO 2TB 通电 3012 小时 / 写入 40.6 TB /
+  读取 106.9 TB / 电源周期 1165 / 温度 54°C——均命中 `nvme_ioctl` 通道
+
 ## [0.2.1] - 2026-08-18
 
 ### 修复

@@ -14,8 +14,9 @@
       （ATA PASS-THROUGH(16) 内嵌 IDENTIFY DEVICE，需管理员；受限语言模式或
       非管理员时自动跳过，保留桥上报信息）
       3. MSStorageDriver_ATAPISmartData（root\WMI）  —— ATA SMART 512 字节原始属性（SATA/USB-SATA）
-      4. MSFT_StorageReliabilityCounter              —— 温度、上电时间、磨损、读写错误（NVMe/存储栈，需管理员）
-      5. smartctl.exe（smartmontools，-d sat / -d nvme 回退）—— 完整属性表 / NVMe 健康日志
+      4. NVMe 原生健康日志（IOCTL_STORAGE_QUERY_PROPERTY 直通）—— NVMe 真实通电时间/读写量/温度（免 smartctl，未提权可用）
+      5. MSFT_StorageReliabilityCounter              —— 温度、上电时间、磨损、读写错误（NVMe/存储栈，需管理员）
+      6. smartctl.exe（smartmontools，-d sat / -d nvme 回退）—— 完整属性表 / NVMe 健康日志
     健康评估、属性名称表、温度/上电时间/读写量提取采用业界通用的
     ATA SMART 判定惯例（阈值、温度警戒、最差值合并）。
     stdout 只输出 UTF-8 JSON 数组（每块物理盘一个对象）；诊断信息走 Verbose 流。
@@ -599,6 +600,139 @@ function Get-MsftSmart {
     return @{ attrs = $attrs; temp = $temp; poh = $poh; health = $health }
 }
 
+# ── 通道 4：NVMe 原生健康日志（IOCTL_STORAGE_QUERY_PROPERTY 直通，免 smartctl）──
+# 参考 FileSystemExplorer 的 NVMe 直通实现：DeviceIoControl + StorageDeviceProtocolSpecificProperty
+# 查询 NVMe SMART/Health Information Log Page (02h)。STORAGE_PROTOCOL_SPECIFIC_DATA
+# 从 STORAGE_PROPERTY_QUERY.AdditionalParameters（偏移 8）起覆盖放置；协议数据偏移
+# 以 ProtocolSpecificData 起始为基准。FILE_ANY_ACCESS 查询，零访问权限打开设备即可，
+# 未提权环境也可成功（实测）。
+function Get-NvmeSmartNative {
+    param([int]$Index)
+    try {
+        $nvmeSrc = @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class DshNvmeProbe {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(IntPtr hDevice, uint dwIoControlCode, byte[] lpInBuffer, uint nInBufferSize, byte[] lpOutBuffer, uint nOutBufferSize, out uint lpBytesReturned, IntPtr lpOverlapped);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    // NVMe SMART/Health Log Page (02h) via IOCTL_STORAGE_QUERY_PROPERTY.
+    // Buffer layout follows the MSDN NVMe sample: STORAGE_PROTOCOL_SPECIFIC_DATA
+    // overlays STORAGE_PROPERTY_QUERY.AdditionalParameters (offset 8).
+    public static byte[] QueryHealthLog(uint driveIndex) {
+        const uint IOCTL_STORAGE_QUERY_PROPERTY = 0x2D1400;
+        const uint STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY = 50;
+        const uint PROTOCOL_TYPE_NVME = 3;
+        const uint NVME_DATA_TYPE_LOG_PAGE = 2;
+        const uint NVME_LOG_ID_SMART_HEALTH = 0x02;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_ATTRIBUTE_NORMAL = 0x80;
+        const uint FILE_SHARE_READ_WRITE = 0x03;
+        int spsdSize = 40;
+        int total = 8 + spsdSize + 4096;
+        byte[] inBuf = new byte[total];
+        uint[] fields = new uint[12] {
+            STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY, // PropertyId
+            0,                                         // QueryType
+            PROTOCOL_TYPE_NVME,                        // ProtocolType
+            NVME_DATA_TYPE_LOG_PAGE,                   // DataType
+            NVME_LOG_ID_SMART_HEALTH,                  // ProtocolDataRequestValue (Log Id)
+            0,                                         // ProtocolDataRequestSubValue
+            (uint)spsdSize,                            // ProtocolDataOffset
+            512,                                       // ProtocolDataLength
+            0, 0, 0, 0                                 // FixedProtocolReturnData, SubValue2, SubValue3, Reserved
+        };
+        for (int i = 0; i < fields.Length; i++) {
+            byte[] b = BitConverter.GetBytes(fields[i]);
+            Array.Copy(b, 0, inBuf, i * 4, 4);
+        }
+        string path = @"\\.\PhysicalDrive" + driveIndex.ToString();
+        IntPtr h = CreateFileW(path, 0, FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+        if (h == IntPtr.Zero || h == new IntPtr(-1)) { return null; }
+        byte[] outBuf = new byte[total];
+        uint returned = 0;
+        bool ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, inBuf, (uint)inBuf.Length, outBuf, (uint)outBuf.Length, out returned, IntPtr.Zero);
+        CloseHandle(h);
+        if (!ok) { return null; }
+        // STORAGE_PROTOCOL_DATA_DESCRIPTOR: Version(4) + Size(4) + ProtocolSpecificData(40)
+        if (returned < 48) { return null; }
+        uint version = BitConverter.ToUInt32(outBuf, 0);
+        uint size = BitConverter.ToUInt32(outBuf, 4);
+        if (version != 48 || size != 48) { return null; }
+        // ProtocolDataOffset/Length live inside STORAGE_PROTOCOL_SPECIFIC_DATA;
+        // the log page is placed relative to the ProtocolSpecificData start (offset 8).
+        uint protoOffset = BitConverter.ToUInt32(outBuf, 8 + 16);
+        uint protoLength = BitConverter.ToUInt32(outBuf, 8 + 20);
+        if (protoOffset < (uint)spsdSize || protoLength < 512) { return null; }
+        if (returned < 8 + protoOffset + 512) { return null; }
+        byte[] log = new byte[512];
+        Array.Copy(outBuf, (int)(8 + protoOffset), log, 0, 512);
+        return log;
+    }
+}
+'@
+        if (-not ('DshNvmeProbe' -as [type])) {
+            Add-Type -TypeDefinition $nvmeSrc -ErrorAction Stop
+        }
+        $log = [DshNvmeProbe]::QueryHealthLog([uint32]$Index)
+        if ($null -eq $log -or $log.Length -lt 512) { return $null }
+        # 全零页 = 桥/驱动未返回真实数据
+        $sum = 0
+        foreach ($b in $log) { $sum += $b }
+        if ($sum -eq 0) { return $null }
+
+        # NVMe SMART/Health Log (02h) 布局：128-bit 字段取低 64 位（消费级足够）
+        $critWarn = [int]$log[0]
+        $tempK = [BitConverter]::ToUInt16($log, 1)
+        $spare = [int]$log[3]
+        $spareTh = [int]$log[4]
+        $used = [int]$log[5]
+        $dataUnitsRead = [BitConverter]::ToUInt64($log, 32)
+        $dataUnitsWritten = [BitConverter]::ToUInt64($log, 48)
+        $powerCycles = [BitConverter]::ToUInt64($log, 112)
+        $powerOnHours = [BitConverter]::ToUInt64($log, 128)
+        $mediaErrors = [BitConverter]::ToUInt64($log, 160)
+
+        $tempC = $null
+        if ($tempK -ge 273 -and $tempK -le 400) { $tempC = [int]($tempK - 273) }
+
+        $attrs = @()
+        $critCur = if ($critWarn -eq 0) { 100 } else { 0 }
+        $critStatus = if ($critWarn -ne 0) { 'Bad' } else { 'Good' }
+        $attrs += @{ id = 250; name = '严重警告标志'; raw_value = $critWarn; current = $critCur; worst = $critCur; threshold = 1; is_critical = $true; status = $critStatus }
+        $spareStatus = 'Good'
+        if ($spare -le $spareTh) { $spareStatus = 'Bad' } elseif ($spare -lt 10) { $spareStatus = 'Warning' }
+        $attrs += @{ id = 251; name = '可用备用空间'; raw_value = $spare; current = $spare; worst = $spare; threshold = $spareTh; is_critical = $true; status = $spareStatus }
+        $usedCur = if ($used -gt 100) { 0 } else { 100 - $used }
+        $usedStatus = 'Good'
+        if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = 'Warning' }
+        $attrs += @{ id = 252; name = '已用寿命百分比'; raw_value = $used; current = $usedCur; worst = $usedCur; threshold = 90; is_critical = $true; status = $usedStatus }
+        if ($null -ne $tempC) {
+            $tempCurrent = if ($tempC -lt 50) { 100 } else { 100 - ($tempC - 50) }
+            if ($tempCurrent -lt 0) { $tempCurrent = 0 }
+            $tempStatus = if ($tempC -ge 55) { 'Warning' } else { 'Good' }
+            $attrs += @{ id = 194; name = '温度'; raw_value = $tempC; current = $tempCurrent; worst = $tempCurrent; threshold = 55; is_critical = $false; status = $tempStatus }
+        }
+        $attrs += @{ id = 9; name = '上电累计时间'; raw_value = $powerOnHours; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $attrs += @{ id = 12; name = '电源周期计数'; raw_value = $powerCycles; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $attrs += @{ id = 241; name = 'LBA 写入总计'; raw_value = ($dataUnitsWritten * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $attrs += @{ id = 242; name = 'LBA 读取总计'; raw_value = ($dataUnitsRead * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $mediaCur = if ($mediaErrors -eq 0) { 100 } else { 0 }
+        $mediaStatus = if ($mediaErrors -gt 0) { 'Warning' } else { 'Good' }
+        $attrs += @{ id = 255; name = '介质错误计数'; raw_value = $mediaErrors; current = $mediaCur; worst = $mediaCur; threshold = 1; is_critical = $true; status = $mediaStatus }
+        return @{ attrs = $attrs; temp = $tempC; poh = $powerOnHours; health = 'Unknown' }
+    }
+    catch {
+        Write-Verbose ('NVMe 原生健康日志通道失败: ' + $_.Exception.Message)
+        return $null
+    }
+}
+
 # ── smartctl 定位（固定安装位置优先，PATH 最后回退）──
 function Resolve-Smartctl {
     param([string]$CustomPath)
@@ -739,7 +873,17 @@ function Get-DiskSmart {
         if ($wmiAttrs -and @($wmiAttrs).Count -gt 0) { $attrs = @($wmiAttrs); $sources += 'wmi_ata_smart' }
     }
 
-    # MSFT 存储可靠性计数器（NVMe 原生路径 / WMI 失败后的回退）
+    # NVMe：优先原生健康日志 IOCTL 直通（含真实通电时间/读写量，免 smartctl）
+    if ($isNvme -and @($attrs).Count -eq 0) {
+        Write-Verbose ('SMART: PhysicalDrive{0} 走 NVMe 原生健康日志通道（IOCTL 直通）' -f $Index)
+        $nvmeNative = Get-NvmeSmartNative $Index
+        if ($nvmeNative -and @($nvmeNative.attrs).Count -gt 0) {
+            $attrs = @($nvmeNative.attrs)
+            $sources += 'nvme_ioctl'
+        }
+    }
+
+    # MSFT 存储可靠性计数器（NVMe 原生通道 / WMI 失败后的回退）
     if (@($attrs).Count -eq 0) {
         Write-Verbose ('SMART: PhysicalDrive{0} 尝试 MSFT 存储可靠性计数器' -f $Index)
         $msft = Get-MsftSmart $Pd

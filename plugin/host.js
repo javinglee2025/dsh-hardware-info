@@ -578,6 +578,139 @@ function Get-MsftSmart {
     return @{ attrs = $attrs; temp = $temp; poh = $poh; health = $health }
 }
 
+# ?? ?? 4?NVMe ????????OCTL_STORAGE_QUERY_PROPERTY ???? smartctl???
+# ?? FileSystemExplorer src/core/smart/nvme.rs?Dev?ce?oControl + StorageDev?ceProtocolSpec?f?cProperty
+# ?? NVMe SMART/Health ?nformat?on Log Page (02h)?STORAGE_PROTOCOL_SPEC?F?C_DATA
+# ? STORAGE_PROPERTY_QUERY.Add?t?onalParameters??? 8?????????????
+# ? ProtocolSpec?f?cData ??????F?LE_ANY_ACCESS ???????????????
+# ??????????????
+function Get-NvmeSmartNative {
+    param([int]$Index)
+    try {
+        $nvmeSrc = @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class DshNvmeProbe {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(IntPtr hDevice, uint dwIoControlCode, byte[] lpInBuffer, uint nInBufferSize, byte[] lpOutBuffer, uint nOutBufferSize, out uint lpBytesReturned, IntPtr lpOverlapped);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    // NVMe SMART/Health Log Page (02h) via IOCTL_STORAGE_QUERY_PROPERTY.
+    // Buffer layout follows the MSDN NVMe sample: STORAGE_PROTOCOL_SPECIFIC_DATA
+    // overlays STORAGE_PROPERTY_QUERY.AdditionalParameters (offset 8).
+    public static byte[] QueryHealthLog(uint driveIndex) {
+        const uint IOCTL_STORAGE_QUERY_PROPERTY = 0x2D1400;
+        const uint STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY = 50;
+        const uint PROTOCOL_TYPE_NVME = 3;
+        const uint NVME_DATA_TYPE_LOG_PAGE = 2;
+        const uint NVME_LOG_ID_SMART_HEALTH = 0x02;
+        const uint OPEN_EXISTING = 3;
+        const uint FILE_ATTRIBUTE_NORMAL = 0x80;
+        const uint FILE_SHARE_READ_WRITE = 0x03;
+        int spsdSize = 40;
+        int total = 8 + spsdSize + 4096;
+        byte[] inBuf = new byte[total];
+        uint[] fields = new uint[12] {
+            STORAGE_DEVICE_PROTOCOL_SPECIFIC_PROPERTY, // PropertyId
+            0,                                         // QueryType
+            PROTOCOL_TYPE_NVME,                        // ProtocolType
+            NVME_DATA_TYPE_LOG_PAGE,                   // DataType
+            NVME_LOG_ID_SMART_HEALTH,                  // ProtocolDataRequestValue (Log Id)
+            0,                                         // ProtocolDataRequestSubValue
+            (uint)spsdSize,                            // ProtocolDataOffset
+            512,                                       // ProtocolDataLength
+            0, 0, 0, 0                                 // FixedProtocolReturnData, SubValue2, SubValue3, Reserved
+        };
+        for (int i = 0; i < fields.Length; i++) {
+            byte[] b = BitConverter.GetBytes(fields[i]);
+            Array.Copy(b, 0, inBuf, i * 4, 4);
+        }
+        string path = @"\\\\.\\PhysicalDrive" + driveIndex.ToString();
+        IntPtr h = CreateFileW(path, 0, FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+        if (h == IntPtr.Zero || h == new IntPtr(-1)) { return null; }
+        byte[] outBuf = new byte[total];
+        uint returned = 0;
+        bool ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, inBuf, (uint)inBuf.Length, outBuf, (uint)outBuf.Length, out returned, IntPtr.Zero);
+        CloseHandle(h);
+        if (!ok) { return null; }
+        // STORAGE_PROTOCOL_DATA_DESCRIPTOR: Version(4) + Size(4) + ProtocolSpecificData(40)
+        if (returned < 48) { return null; }
+        uint version = BitConverter.ToUInt32(outBuf, 0);
+        uint size = BitConverter.ToUInt32(outBuf, 4);
+        if (version != 48 || size != 48) { return null; }
+        // ProtocolDataOffset/Length live inside STORAGE_PROTOCOL_SPECIFIC_DATA;
+        // the log page is placed relative to the ProtocolSpecificData start (offset 8).
+        uint protoOffset = BitConverter.ToUInt32(outBuf, 8 + 16);
+        uint protoLength = BitConverter.ToUInt32(outBuf, 8 + 20);
+        if (protoOffset < (uint)spsdSize || protoLength < 512) { return null; }
+        if (returned < 8 + protoOffset + 512) { return null; }
+        byte[] log = new byte[512];
+        Array.Copy(outBuf, (int)(8 + protoOffset), log, 0, 512);
+        return log;
+    }
+}
+'@
+        if (-not ('DshNvmeProbe' -as [type])) {
+            Add-Type -TypeDefinition $nvmeSrc -ErrorAction Stop
+        }
+        $log = [DshNvmeProbe]::QueryHealthLog([uint32]$Index)
+        if ($null -eq $log -or $log.Length -lt 512) { return $null }
+        # ??? = ?/?????????
+        $sum = 0
+        foreach ($b in $log) { $sum += $b }
+        if ($sum -eq 0) { return $null }
+
+        # NVMe SMART/Health Log (02h) ???128-b?t ???? 64 ????????
+        $critWarn = [int]$log[0]
+        $tempK = [BitConverter]::ToUInt16($log, 1)
+        $spare = [int]$log[3]
+        $spareTh = [int]$log[4]
+        $used = [int]$log[5]
+        $dataUnitsRead = [BitConverter]::ToUInt64($log, 32)
+        $dataUnitsWritten = [BitConverter]::ToUInt64($log, 48)
+        $powerCycles = [BitConverter]::ToUInt64($log, 112)
+        $powerOnHours = [BitConverter]::ToUInt64($log, 128)
+        $mediaErrors = [BitConverter]::ToUInt64($log, 160)
+
+        $tempC = $null
+        if ($tempK -ge 273 -and $tempK -le 400) { $tempC = [int]($tempK - 273) }
+
+        $attrs = @()
+        $critCur = if ($critWarn -eq 0) { 100 } else { 0 }
+        $critStatus = if ($critWarn -ne 0) { 'Bad' } else { 'Good' }
+        $attrs += @{ id = 250; name = (ConvertFrom-UEsc '\\u4E25\\u91CD\\u8B66\\u544A\\u6807\\u5FD7'); raw_value = $critWarn; current = $critCur; worst = $critCur; threshold = 1; is_critical = $true; status = $critStatus }
+        $spareStatus = 'Good'
+        if ($spare -le $spareTh) { $spareStatus = 'Bad' } elseif ($spare -lt 10) { $spareStatus = (ConvertFrom-UEsc 'Warning') }
+        $attrs += @{ id = 251; name = (ConvertFrom-UEsc '\\u53EF\\u7528\\u5907\\u7528\\u7A7A\\u95F4'); raw_value = $spare; current = $spare; worst = $spare; threshold = $spareTh; is_critical = $true; status = $spareStatus }
+        $usedCur = if ($used -gt 100) { 0 } else { 100 - $used }
+        $usedStatus = 'Good'
+        if ($used -ge 100) { $usedStatus = 'Bad' } elseif ($used -ge 90) { $usedStatus = (ConvertFrom-UEsc 'Warning') }
+        $attrs += @{ id = 252; name = (ConvertFrom-UEsc '\\u5DF2\\u7528\\u5BFF\\u547D\\u767E\\u5206\\u6BD4'); raw_value = $used; current = $usedCur; worst = $usedCur; threshold = 90; is_critical = $true; status = $usedStatus }
+        if ($null -ne $tempC) {
+            $tempCurrent = if ($tempC -lt 50) { 100 } else { 100 - ($tempC - 50) }
+            if ($tempCurrent -lt 0) { $tempCurrent = 0 }
+            $tempStatus = if ($tempC -ge 55) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+            $attrs += @{ id = 194; name = (ConvertFrom-UEsc '\\u6E29\\u5EA6'); raw_value = $tempC; current = $tempCurrent; worst = $tempCurrent; threshold = 55; is_critical = $false; status = $tempStatus }
+        }
+        $attrs += @{ id = 9; name = (ConvertFrom-UEsc '\\u4E0A\\u7535\\u7D2F\\u8BA1\\u65F6\\u95F4'); raw_value = $powerOnHours; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $attrs += @{ id = 12; name = (ConvertFrom-UEsc '\\u7535\\u6E90\\u5468\\u671F\\u8BA1\\u6570'); raw_value = $powerCycles; current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $attrs += @{ id = 241; name = (ConvertFrom-UEsc 'LBA \\u5199\\u5165\\u603B\\u8BA1'); raw_value = ($dataUnitsWritten * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $attrs += @{ id = 242; name = (ConvertFrom-UEsc 'LBA \\u8BFB\\u53D6\\u603B\\u8BA1'); raw_value = ($dataUnitsRead * 1000); current = 100; worst = 100; threshold = 0; is_critical = $false; status = 'Good' }
+        $mediaCur = if ($mediaErrors -eq 0) { 100 } else { 0 }
+        $mediaStatus = if ($mediaErrors -gt 0) { (ConvertFrom-UEsc 'Warning') } else { 'Good' }
+        $attrs += @{ id = 255; name = (ConvertFrom-UEsc '\\u4ECB\\u8D28\\u9519\\u8BEF\\u8BA1\\u6570'); raw_value = $mediaErrors; current = $mediaCur; worst = $mediaCur; threshold = 1; is_critical = $true; status = $mediaStatus }
+        return @{ attrs = $attrs; temp = $tempC; poh = $powerOnHours; health = 'Unknown' }
+    }
+    catch {
+        Write-Verbose ((ConvertFrom-UEsc 'NVMe \\u539F\\u751F\\u5065\\u5EB7\\u65E5\\u5FD7\\u901A\\u9053\\u5931\\u8D25: ') + $_.Exception.Message)
+        return $null
+    }
+}
+
 # ?? smartctl ????????????PATH ???????
 function Resolve-Smartctl {
     param([string]$CustomPath)
@@ -716,6 +849,16 @@ function Get-DiskSmart {
         Write-Verbose ((ConvertFrom-UEsc 'SMART: PhysicalDrive{0} \\u8D70 WMI ATA SMART \\u901A\\u9053') -f $Index)
         $wmiAttrs = Get-WmiAtaSmart $serial
         if ($wmiAttrs -and @($wmiAttrs).Count -gt 0) { $attrs = @($wmiAttrs); $sources += (ConvertFrom-UEsc 'wmi_ata_smart') }
+    }
+
+    # NVMe????????? ?OCTL ??????????/????? smartctl?
+    if ($isNvme -and @($attrs).Count -eq 0) {
+        Write-Verbose ((ConvertFrom-UEsc 'SMART: PhysicalDrive{0} \\u8D70 NVMe \\u539F\\u751F\\u5065\\u5EB7\\u65E5\\u5FD7\\u901A\\u9053\\uFF08IOCTL \\u76F4\\u901A\\uFF09') -f $Index)
+        $nvmeNative = Get-NvmeSmartNative $Index
+        if ($nvmeNative -and @($nvmeNative.attrs).Count -gt 0) {
+            $attrs = @($nvmeNative.attrs)
+            $sources += (ConvertFrom-UEsc 'nvme_ioctl')
+        }
     }
 
     # MSFT ?????????NVMe ???? / WM? ???????

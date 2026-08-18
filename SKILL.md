@@ -1,6 +1,6 @@
 ---
 name: dsh-hardware-info
-description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固件版本、接口与总线类型、容量）与 S.M.A.R.T. 健康数据（整体健康状态、温度、上电时间、总读写量、磨损、属性表），多通道回退：Win32_DiskDrive WMI（USB 桥盘完整模式另走 SCSI SAT 直通取桥后真实盘体身份）→ root\WMI ATA SMART 原始属性 → MSFT 存储可靠性计数器 → smartctl。当用户询问硬盘型号、序列号、SMART 信息、磁盘健康状态或取证设备清单时使用本技能。
+description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固件版本、接口与总线类型、容量）与 S.M.A.R.T. 健康数据（整体健康状态、温度、上电时间、总读写量、磨损、属性表），多通道回退：Win32_DiskDrive WMI（USB 桥盘完整模式另走 SCSI SAT 直通取桥后真实盘体身份）→ root\WMI ATA SMART 原始属性 → NVMe 原生健康日志 IOCTL 直通（真实通电时间/读写量，免提权免 smartctl）→ MSFT 存储可靠性计数器 → smartctl。当用户询问硬盘型号、序列号、SMART 信息、磁盘健康状态或取证设备清单时使用本技能。
 ---
 
 # 硬盘硬件信息提取（Windows）
@@ -20,7 +20,8 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 
 - Windows 主机（PowerShell 5.1+ / pwsh 7+）
 - 基本信息（型号/序列号/容量）：无需管理员
-- 完整 SMART（MSFT 计数器 / root\WMI 原始属性 / smartctl）：通常需要管理员权限；
+- NVMe 盘完整 SMART（原生健康日志 IOCTL 直通，含真实通电时间/读写量）：无需管理员；
+- 其他盘完整 SMART（MSFT 计数器 / root\WMI 原始属性 / smartctl）：通常需要管理员权限；
   无权限时返回基本信息并附带 error 字段说明
 - smartctl 通道可选：smartmontools 安装于固定目录或 PATH
 - USB 桥接移动硬盘的真实盘体型号/序列号/固件：SCSI SAT 直通通道（需管理员权限
@@ -81,7 +82,7 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
 | `attributes[]` | SMART 属性表：`id/name/raw_value/current/worst/threshold/is_critical/status` |
 | `failure_predicted` | 是否预示故障（健康为 Bad 时为 true） |
 | `is_virtual_disk` | 虚拟盘（VHD/VMware 等）为 true，虚拟盘跳过 SMART |
-| `data_sources[]` | 实际命中的数据通道（win32_diskdrive / scsi_sat_passthrough / wmi_ata_smart / msft_reliability / smartctl）；`scsi_sat_passthrough` 表示 USB 桥后真实盘体身份已由 SAT 直通命中 |
+| `data_sources[]` | 实际命中的数据通道（win32_diskdrive / scsi_sat_passthrough / nvme_ioctl / wmi_ata_smart / msft_reliability / smartctl）；`scsi_sat_passthrough` 表示 USB 桥后真实盘体身份已由 SAT 直通命中，`nvme_ioctl` 表示 NVMe 原生健康日志直通命中（含真实通电时间与读写量） |
 | `error` | 查询失败原因；null 表示成功 |
 
 健康判定要点：
@@ -100,9 +101,9 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
   `USB3.0 storage USB Device`）；管理员完整模式下脚本经 SCSI SAT 直通自动替换为
   桥后真实盘体信息（命中时 `data_sources` 含 `scsi_sat_passthrough`），
   未命中则保留桥上报值
-- 部分 NVMe 盘经 MSFT 计数器通道时不追踪 `power_on_hours` / 读写量（字段为 null）：
-  不能据此判断「新盘」；需真实通电时间 / 读写量时走
-  smartctl（`-d nvme`）通道
+- NVMe 盘优先走原生健康日志 IOCTL 直通（`data_sources` 含 `nvme_ioctl`），
+  直接给出真实 `power_on_hours` / 读写量，无需 smartctl；仅当该通道失败（如部分
+  USB→NVMe 桥）才回退 MSFT 计数器（此时 `power_on_hours` 可能为 null，不代表新盘）
 - `health_status = Good` 仅表示三通道合并判级正常，仍应结合属性表观察趋势
   （如重分配扇区、磨损百分比）
 
@@ -113,10 +114,12 @@ description: 提取 Windows 物理磁盘硬件信息（型号、序列号、固�
   不要反复重试；让用户在**不受限的 PowerShell 终端**中执行脚本，或在完整访问模式的会话中运行
 - **如何确认是沙箱拦截而非权限/服务问题**：Winmgmt 与 DcomLaunch 服务均在运行，
   但 `Get-CimInstance Win32_ComputerSystem` 报「无法从客户端中访问 CIM 资源」→ 即命名管道被沙箱拦截
-- **完整 SMART 需要提权**：请用户在管理员 PowerShell 中运行；或使用
+- **NVMe 盘完整 SMART 无需提权**：原生健康日志直通通道未提权即可命中
+- **完整 SMART 需要提权**（SATA/USB 桥盘走 MSFT/SAT/root\WMI 时）：请用户在管理员 PowerShell 中运行；或使用
   `Start-Process powershell -Verb RunAs`（弹 UAC，用户点「是」）自动提权重跑
-- **`power_on_hours` 为 0 或 null 但盘已使用很久**：部分 NVMe 盘经 MSFT 计数器通道未追踪该字段，
-  不代表新盘；安装 smartmontools 走 smartctl（`-d nvme`）通道获取真实通电时间与读写量
+- **`power_on_hours` 为 0 或 null 但盘已使用很久**：NVMe 盘应命中 `nvme_ioctl` 通道
+  （免提权给出真实通电时间/读写量）；若 `data_sources` 无 `nvme_ioctl`（如 USB→NVMe 桥），
+  MSFT 计数器通道未追踪该字段，不代表新盘，可安装 smartmontools 走 smartctl 通道
 - **is_virtual_disk = true**：虚拟盘没有真实 SMART，属预期行为
 - **error 提示需要管理员权限**：MSFT 计数器与 root\WMI 原始属性需要提权；请用户在管理员会话中运行或接受基本信息
 - **USB 桥接移动硬盘无 SMART**：smartctl 通道会尝试 `-d sat`；安装 smartmontools 可提升成功率

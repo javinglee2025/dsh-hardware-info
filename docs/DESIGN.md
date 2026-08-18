@@ -12,7 +12,8 @@
 Win32_DiskDrive（WMI 基本信息，恒可用）
   ├─ 虚拟盘短路（VHD/VMware 等无真实 SMART，提前返回友好提示）
   ├─ USB 桥身份识别：SCSI SAT 直通 → 桥后真实盘体型号/序列号/固件（完整模式，需管理员）
-  ├─ NVMe：MSFT 存储可靠性计数器 → smartctl（-d nvme）
+  ├─ NVMe：原生健康日志 IOCTL 直通（免提权，含真实通电时间/读写量）
+  │        → MSFT 存储可靠性计数器 → smartctl（-d nvme）
   └─ ATA ：root\WMI ATA SMART 512 字节原始属性 → MSFT 计数器 → smartctl（-d sat）
 ```
 
@@ -54,10 +55,38 @@ id(1) | flags(2) | current(1) | worst(1) | raw(6, 小端) | reserved(1)
 实现同时兼容数字与字符串两种形态。
 
 注意：该计数器对部分 NVMe 盘**不追踪**上电时间与累计读写量（实测
-`power_on_hours` / 读写量为 null），不能据此判断「新盘」；此类字段
-以 smartctl NVMe 健康日志为准。字段为 null 时不生成对应属性条目，
+`power_on_hours` / 读写量为 null），不能据此判断「新盘」；NVMe 盘此类字段
+以原生健康日志直通通道为准（见下节），原生直通失败时再以 smartctl
+NVMe 健康日志为准。字段为 null 时不生成对应属性条目，
 避免 0 值造成「新盘 / 零磨损」误读；温度兼容摄氏与 Kelvin
 （250..400 减 273）两种上报形态。
+
+### NVMe 原生健康日志（IOCTL_STORAGE_QUERY_PROPERTY 直通）
+
+实现对齐 FileSystemExplorer 的 NVMe 直通实现（经版权方授权参考）：
+
+- `DeviceIoControl(IOCTL_STORAGE_QUERY_PROPERTY=0x2D1400)`，
+  PropertyId=StorageDeviceProtocolSpecificProperty(50)、
+  ProtocolType=NVMe(3)、DataType=LogPage(2)、LogId=02h(SMART/Health)，
+  协议数据 512 字节
+- 缓冲布局（MSDN「Working with NVMe Devices」示例）：
+  `STORAGE_PROTOCOL_SPECIFIC_DATA` 从 `STORAGE_PROPERTY_QUERY.AdditionalParameters`
+  （偏移 8）起覆盖放置——错放到偏移 9 会导致 stornvme 把 ProtocolType
+  读成 0x300 并返回 ERROR_INVALID_PARAMETER
+- 返回描述符 `STORAGE_PROTOCOL_DATA_DESCRIPTOR`（Version/Size=48 +
+  ProtocolSpecificData 40 字节），日志页位于 ProtocolSpecificData 起始 +
+  ProtocolDataOffset（以 ProtocolSpecificData 为基准，不是整个描述符起始）
+- 设备以**零访问权限**打开（FILE_SHARE_READ|WRITE）：FILE_ANY_ACCESS 查询类
+  IOCTL 不需要 GENERIC_READ/WRITE，未提权环境实测即可成功——NVMe 完整
+  SMART（含真实通电时间/读写量）因此**无需管理员**（依赖 Add-Type，
+  受限语言模式下自动跳过该通道）
+- 日志页 02h 布局：CriticalWarning(0) / 温度 Kelvin(1..2) / 备用空间(3) /
+  备用阈值(4) / 寿命百分比(5) / DataUnitsRead(32..47) / DataUnitsWritten(48..63) /
+  PowerCycles(112..127) / PowerOnHours(128..143) / MediaErrors(160..175)；
+  128-bit 字段取低 64 位（消费级足够）；1 数据单元 = 1000 × 512 字节
+- 映射属性：250 严重警告 / 251 备用空间 / 252 寿命百分比 / 194 温度 /
+  9 上电累计时间 / 12 电源周期 / 241 LBA 写入 / 242 LBA 读取 / 255 介质错误；
+  命中时 `data_sources` 追加 `nvme_ioctl`
 
 ### USB 桥 SCSI SAT 直通身份识别
 

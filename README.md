@@ -45,7 +45,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Get-DiskHardwareInfo
 | `-NoSmartctl` | 禁用 smartctl 回退 |
 | `-SmartctlPath <path>` | 自定义 smartctl.exe 路径 |
 
-完整 SMART 数据（MSFT 计数器 / root\WMI 原始属性 / smartctl）通常需要**管理员权限**；
+NVMe 盘的完整 SMART（原生健康日志 IOCTL 直通：真实通电时间/读写量/温度）**无需管理员**；
+其余完整 SMART 数据（MSFT 计数器 / root\WMI 原始属性 / smartctl）通常需要**管理员权限**；
 无权限时仍返回身份信息并附带 `error` 说明。不想手动右键「以管理员身份运行」时，
 可一行命令自动弹 UAC 提权重跑（窗口弹出后点「是」）：
 
@@ -146,12 +147,16 @@ git clone https://github.com/javinglee2025/dsh-hardware-info.git
 ```
 Win32_DiskDrive（WMI 基本信息，恒可用）
   ├─ 虚拟盘短路（VHD/VMware 等无真实 SMART，提前返回友好提示）
-  ├─ NVMe：MSFT 存储可靠性计数器 → smartctl（-d nvme）
+  ├─ NVMe：原生健康日志 IOCTL 直通（免提权，含真实通电时间/读写量）
+  │        → MSFT 存储可靠性计数器 → smartctl（-d nvme）
   └─ ATA ：root\WMI ATA SMART 512 字节原始属性 → MSFT 计数器 → smartctl（-d sat）
 ```
 
 - `root\WMI MSStorageDriver_ATAPISmartData`：30 条 × 12 字节属性解析，
   阈值取自 `MSStorageDriver_ATAPISmartThresholds`
+- `NVMe 原生健康日志`（`IOCTL_STORAGE_QUERY_PROPERTY` 直通 Log Page 02h，
+  参考 FileSystemExplorer 的 NVMe 直通实现）：通电时间 / 电源周期 / 温度 /
+  读写量 / 备用空间 / 寿命百分比 / 严重警告标志 / 介质错误——免提权、免 smartctl
 - `MSFT_StorageReliabilityCounter`：温度 / 上电时间 / 磨损 / 读写错误 + 磁盘健康
 - `smartctl -A --json`：完整属性表与 NVMe 健康日志（固定安装目录优先，防 PATH 劫持）
 - `MSFT_PhysicalDisk`（身份信息修正通道）：序列号按优先级解析——
@@ -160,9 +165,10 @@ Win32_DiskDrive（WMI 基本信息，恒可用）
   `Win32_DiskDrive.SerialNumber` 是 NGUID 编码串（如 `0025_3842_A1B2_C3D4.`），
   不是真实序列号
 
-> **实测注意**：部分 NVMe 盘经 MSFT 计数器通道时 `power_on_hours` 与读写量为 null
-> （该通道未追踪这些字段），**不能据此判断是「新盘」**；
-> 需要真实通电时间 / 读写量时，安装 smartmontools 走 smartctl（`-d nvme`）通道。
+> **实测注意**：NVMe 盘优先命中原生健康日志直通（`data_sources` 含 `nvme_ioctl`），
+> 直接给出真实 `power_on_hours` / 读写量，无需安装 smartmontools；仅当该通道失败
+> （如部分 USB→NVMe 桥）才回退 MSFT 计数器，此时 `power_on_hours` 与读写量可能为 null
+> （该通道未追踪这些字段），**不能据此判断是「新盘」**。
 
 ## 开发
 
