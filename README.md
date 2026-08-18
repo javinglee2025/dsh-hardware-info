@@ -1,5 +1,8 @@
 # dsh-hardware-info
 
+[![简体中文](https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-%E5%BD%93%E5%89%8D%E7%89%88%E6%9C%AC-brightgreen)](README.md)
+[![English](https://img.shields.io/badge/English-%E5%88%87%E6%8D%A2-blue)](README.en.md)
+
 Windows 物理磁盘硬件信息提取：**型号 / 序列号 / 固件 / 接口 / 容量 / S.M.A.R.T. 健康数据**，
 以 DeepSeek Harness（DSH）**技能 + Cordis 插件**双形态提供，可独立开源使用。
 
@@ -12,6 +15,7 @@ Windows 物理磁盘硬件信息提取：**型号 / 序列号 / 固件 / 接口 
 ```
 dsh-hardware-info/
 ├── README.md                  # 本文件
+├── README.en.md               # 英文版说明（README 顶部徽章可切换）
 ├── LICENSE                    # MIT
 ├── SKILL.md                   # DSH 技能（指令包，教 AI 助手如何提取与解读）
 ├── scripts/
